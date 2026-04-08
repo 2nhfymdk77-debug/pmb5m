@@ -1415,9 +1415,16 @@ class PolymarketClient:
                 tick_size=tick_size,
                 neg_risk=neg_risk,
             )
+            
+            # 根据订单类型选择 OrderType
+            order_type_enum = OrderType.GTC
+            if order_type == "GTD":
+                order_type_enum = OrderType.GTD
+            
             response = self.client.create_and_post_order(
                 args,
                 options=order_options,
+                order_type=order_type_enum,
             )
 
             # 解析响应
