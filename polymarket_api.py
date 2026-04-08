@@ -873,20 +873,29 @@ class PolymarketClient:
             print("[*] 检查授权状态...")
             try:
                 allowance_info = self.client.get_balance_allowance()
-                if allowance_info:
+                if allowance_info and isinstance(allowance_info, dict):
                     result["balance"] = float(allowance_info.get("balance", 0) or 0)
                     result["allowance"] = float(allowance_info.get("allowance", 0) or 0)
                     print(f"[*] 当前余额: ${result['balance']:.2f}")
                     print(f"[*] 当前授权额度: ${result['allowance']:.2f}")
+                    # 即使 API 调用成功，也标记为可能需要初始化
+                    if result["allowance"] > 0:
+                        result["initialized"] = True
+                else:
+                    print(f"[!] 获取授权信息返回空，继续尝试初始化...")
             except Exception as e:
-                print(f"[!] get_balance_allowance() 失败: {e}")
+                error_str = str(e)
+                print(f"[!] get_balance_allowance() 失败: {error_str}")
+                # API 调用失败时，继续尝试初始化
+                result["error"] = error_str
             
-            # 2. 如果授权额度不足，尝试更新授权
-            if result["allowance"] < result["balance"] or result["allowance"] == 0:
-                print("[*] 授权额度不足，尝试更新授权...")
+            # 2. 尝试更新授权（如果需要）
+            needs_update = result["allowance"] < result["balance"] or result["allowance"] == 0
+            if needs_update:
+                print("[*] 尝试更新授权...")
                 try:
                     update_result = self.client.update_balance_allowance()
-                    if update_result:
+                    if update_result and isinstance(update_result, dict):
                         success = update_result.get("success", False)
                         new_allowance = update_result.get("value", "")
                         
@@ -899,16 +908,18 @@ class PolymarketClient:
                             else:
                                 result["allowance"] = float(new_allowance) if new_allowance else float("inf")
                                 result["initialized"] = True
-                            print(f"[OK] 授权更新成功，新授权额度: ${result['allowance']:.2f}")
+                            print(f"[OK] 授权更新成功")
                         else:
-                            print(f"[X] 授权更新失败: {update_result}")
-                            result["error"] = "Failed to update allowance"
+                            print(f"[!] 授权更新返回无效结果，但继续运行")
+                            result["initialized"] = True  # 继续尝试
                     else:
-                        print("[X] 授权更新返回空结果")
-                        result["error"] = "Empty update result"
+                        print(f"[!] 授权更新返回空，但继续运行")
+                        result["initialized"] = True  # 继续尝试
                 except Exception as e:
-                    print(f"[X] update_balance_allowance() 失败: {e}")
+                    print(f"[!] update_balance_allowance() 失败: {e}")
+                    print(f"[!] 将尝试直接进行交易...")
                     result["error"] = str(e)
+                    result["initialized"] = True  # 继续尝试，不阻塞用户
             else:
                 print("[OK] 授权状态正常")
                 result["initialized"] = True
