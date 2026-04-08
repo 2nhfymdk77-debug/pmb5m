@@ -40,7 +40,7 @@ def print_config(config: TradingConfig):
     print(f"  止损价格: ${stop_loss_display:.2f}")
     print(f"  止盈价格: ${take_profit_display:.2f}")
     print(f"  交易周期: {config.trade_cycle_minutes} 分钟")
-    print(f"  仓位计算: 余额≥初始×3^n → 开仓=2^n")
+    print(f"  仓位计算: 基础=初始余额/12, 余额≥初始×3^n → 开仓=基础×2^n")
     print(f"\n  身份验证配置:")
     if config.private_key:
         print(f"    Private Key: {config.private_key[:10]}...{config.private_key[-10:]}")

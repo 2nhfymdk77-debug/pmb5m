@@ -756,32 +756,46 @@ class TradingEngine:
         # 可以在这里添加其他日志方式
 
     def calculate_position_size(self) -> float:
-        """计算仓位大小
+        """计算开仓金额（美元）
         
-        策略：
-        - 余额 = 初始余额 × 1 → 开仓 $1
-        - 余额 = 初始余额 × 3 → 开仓 $2 (翻倍)
-        - 余额 = 初始余额 × 9 → 开仓 $4 (再翻倍)
-        - 余额 = 初始余额 × 27 → 开仓 $8 (再翻倍)
+        规则：
+        1. 基础开仓金额 = 初始余额 / 12
+        2. 当余额 ≥ 初始余额 × 3^n 时，开仓金额 = 基础金额 × 2^n
         
         示例：初始余额 $12
-        - 余额 $12   → $1
-        - 余额 $36   → $2
-        - 余额 $108  → $4
-        - 余额 $324  → $8
+        - 余额 $12   → 开仓 $1  (基础)
+        - 余额 $36   → 开仓 $2  (12×3=36, 翻倍)
+        - 余额 $108  → 开仓 $4  (36×3=108, 再翻倍)
+        - 余额 $324  → 开仓 $8  (108×3=324, 再翻倍)
+        
+        Returns:
+            开仓金额（美元）
         """
-        # 使用从 API 读取的初始余额，而非配置值
+        # 使用从 API 读取的初始余额
         initial_balance = self.initial_balance if self.initial_balance > 0 else self.config.initial_balance
         
+        # 基础开仓金额 = 初始余额 / 12
+        base_amount = initial_balance / 12.0
+        
         # 计算翻倍倍数
-        # 余额 >= 初始×3^n 时，倍数 = 2^n
+        # 当余额 >= 初始余额 × 3^n 时，倍数 = 2^n
         multiplier = 1
         power = 0
         while self.balance >= initial_balance * (3 ** power):
             multiplier = 2 ** power
             power += 1
         
-        return float(multiplier)
+        position_amount = base_amount * multiplier
+        
+        # 确保最小开仓金额为 $1
+        if position_amount < 1.0:
+            position_amount = 1.0
+        
+        print(f"[仓位] 初始余额: ${initial_balance:.2f}, 当前余额: ${self.balance:.2f}")
+        print(f"[仓位] 基础金额: ${base_amount:.2f}, 倍数: {multiplier}x")
+        print(f"[仓位] 开仓金额: ${position_amount:.2f}")
+        
+        return position_amount
 
     def place_dual_orders(self, position_size: float) -> None:
         """
@@ -791,9 +805,9 @@ class TradingEngine:
         - 使用 create_and_post_order() 一步完成创建、签名和提交
         - GTC: Good Till Cancelled - 挂单直到成交或取消
         
-        重要：Polymarket 订单最小金额为 $1
-        - 订单金额 = 价格 × 数量
-        - 如果价格 0.75，数量至少需要 2（金额 $1.5）
+        重要：Polymarket 下单单位是金额（美元），不是股数
+        - size 参数直接传递开仓金额
+        - 最小订单金额 = $1
         
         正确逻辑：
         - YES 和 NO 是两个不同的代币
@@ -807,23 +821,15 @@ class TradingEngine:
         entry_price_float = entry_price / 100.0 if entry_price > 1 else entry_price
         entry_display = entry_price_float
 
-        # 计算实际数量（股数）
-        # Polymarket 订单金额 = 价格 × 数量
-        # 最小订单金额 = $1
-        # 数量 = 开仓金额 / 价格，向上取整
-        raw_size = position_size / entry_price_float
-        # 向上取整，确保是整数
-        import math
-        actual_size = math.ceil(raw_size)
-        # 确保订单金额 >= $1
-        order_value = actual_size * entry_price_float
-        if order_value < 1.0:
-            actual_size = math.ceil(1.0 / entry_price_float)
+        # Polymarket 下单单位是金额，直接使用开仓金额
+        order_amount = position_size
         
+        # 确保最小订单金额 $1
+        if order_amount < 1.0:
+            order_amount = 1.0
+
         print(f"[挂单] 挂双向限价单 @ ${entry_display:.2f}")
-        print(f"[挂单] 开仓金额: ${position_size:.2f}，价格: ${entry_price_float:.2f}")
-        print(f"[挂单] 计算数量: {raw_size:.2f} → 实际数量: {actual_size} 股")
-        print(f"[挂单] 订单金额: ${actual_size * entry_price_float:.2f}")
+        print(f"[挂单] 开仓金额: ${order_amount:.2f}")
 
         # 真实API模式：实际挂单
         if not self.yes_token_id or not self.no_token_id:
@@ -845,7 +851,7 @@ class TradingEngine:
             yes_order = self.client.create_order(
                 token_id=self.yes_token_id,
                 price=entry_price,
-                size=float(actual_size),  # 使用计算的数量
+                size=order_amount,  # 直接传递金额
                 side="BUY",
                 order_type="GTC",  # Good Till Cancelled
             )
@@ -856,7 +862,7 @@ class TradingEngine:
             no_order = self.client.create_order(
                 token_id=self.no_token_id,
                 price=entry_price,
-                size=float(actual_size),  # 使用计算的数量
+                size=order_amount,  # 直接传递金额
                 side="BUY",
                 order_type="GTC",
             )
@@ -878,7 +884,7 @@ class TradingEngine:
                     "token": "YES",
                     "token_id": self.yes_token_id,
                     "price": entry_price,
-                    "size": actual_size,
+                    "size": order_amount,
                 }
             if no_order_id:
                 self.pending_orders[no_order_id] = {
@@ -886,7 +892,7 @@ class TradingEngine:
                     "token": "NO",
                     "token_id": self.no_token_id,
                     "price": entry_price,
-                    "size": actual_size,
+                    "size": order_amount,
                 }
 
             print(f"[挂单] [OK] 双向限价单已挂: YES @ ${entry_display:.2f} | NO @ ${entry_display:.2f}")
