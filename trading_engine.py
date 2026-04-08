@@ -543,56 +543,70 @@ class TradingEngine:
         print("[诊断] >>> 进入 fetch_real_market_data")
         
         try:
-            # 步骤1: 获取活跃市场列表
-            print("[诊断] 步骤1: 获取活跃市场列表...")
-            markets = self.client.get_tradable_markets(limit=100)
+            # 步骤1: 计算当前 5分钟周期的 slug
+            print("[诊断] 步骤1: 计算 BTC 5分钟市场 slug...")
+            from datetime import datetime, timezone, timedelta
             
-            if not markets:
-                print("[错误] 无法获取市场列表")
-                return None
+            # 美东时区 (EDT in April = UTC-4)
+            edt = timezone(timedelta(hours=-4))
+            now_edt = datetime.now(edt)
             
-            print(f"[诊断] 获取到 {len(markets)} 个市场")
+            # 计算当前 5分钟周期的开始时间（向下取整）
+            minute = now_edt.minute
+            current_period_minute = (minute // 5) * 5
+            current_period_start = now_edt.replace(minute=current_period_minute, second=0, microsecond=0)
             
-            # 步骤2: 过滤 BTC 5分钟市场
-            print("[诊断] 步骤2: 过滤 BTC 5分钟市场...")
-            btc_market = None
-            for m in markets:
-                slug = (m.get('slug', '') or '').lower()
-                title = (m.get('event_title', '') or '').lower()
-                question = (m.get('question', '') or '').lower()
+            # 转换为 Unix 时间戳
+            current_period_ts = int(current_period_start.timestamp())
+            
+            # 生成 slug
+            current_slug = f"btc-updown-5m-{current_period_ts}"
+            
+            print(f"[*] 美东时间: {now_edt.strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"[*] 当前5分钟周期: {current_period_start.strftime('%Y-%m-%d %H:%M')} (时间戳: {current_period_ts})")
+            print(f"[*] Slug: {current_slug}")
+            
+            # 步骤2: 直接通过 slug 获取市场
+            print(f"[诊断] 步骤2: 通过 slug 获取市场...")
+            market = self.client.get_market_by_slug(current_slug)
+            
+            if not market:
+                print(f"[*] 通过 slug 未找到，尝试获取列表...")
+                # 步骤3: 从列表中搜索
+                markets = self.client.get_tradable_markets(limit=200)
                 
-                # 匹配 BTC 5分钟格式
-                is_btc = 'btc' in slug or 'bitcoin' in slug or 'btc' in title or 'bitcoin' in title
-                is_5min = '5m' in slug or '5 min' in slug or '5min' in slug or 'updown' in slug
+                if not markets:
+                    print("[错误] 无法获取市场列表")
+                    return None
                 
-                if is_btc and is_5min:
-                    btc_market = m
-                    print(f"[诊断] 找到 BTC 市场: {m.get('slug', '')[:60]}")
-                    print(f"[诊断]   question: {m.get('question', '')[:50]}")
-                    break
+                print(f"[诊断] 获取到 {len(markets)} 个市场")
+                
+                # 打印所有 slug 用于调试
+                print("[调试] 前20个市场 slug:")
+                for i, m in enumerate(markets[:20]):
+                    print(f"    [{i+1}] {m.get('slug', '')}")
+                
+                # 搜索 btc-updown-5m
+                for m in markets:
+                    slug = (m.get('slug', '') or '').lower()
+                    if 'btc-updown-5m' in slug:
+                        market = m
+                        print(f"[诊断] 找到 BTC 市场: {slug}")
+                        break
             
-            if not btc_market:
+            if not market:
                 print("[错误] 没有找到 BTC 5分钟市场")
                 return None
             
-            # 步骤3: 获取市场详情
-            market_slug = btc_market.get("slug", "")
-            print(f"[诊断] 步骤3: 获取市场详情: {market_slug}")
-            
-            # 直接使用 btc_market 的数据，因为它已经包含完整信息
-            current_market_id = btc_market.get("condition_id", "")
-            current_slug = btc_market.get("slug", "")
-            current_question = btc_market.get("question", "")
-            
-            print(f"[诊断] 步骤4: 选择市场")
-            print(f"  condition_id: {current_market_id[:30] if current_market_id else 'None'}...")
-            print(f"  slug: {current_slug}")
-            print(f"  question: {current_question[:50]}")
+            # 步骤3: 提取市场信息
+            current_market_id = market.get("condition_id", "")
+            current_slug = market.get("slug", "")
+            current_question = market.get("question", "")
             
             print(f"[诊断] 步骤3: 选择市场")
-            print(f"  market_id: {current_market_id[:30] if current_market_id else 'None'}...")
+            print(f"  condition_id: {current_market_id[:30] if current_market_id else 'None'}...")
             print(f"  slug: {current_slug}")
-            print(f"  question: {current_question[:50]}")
+            print(f"  question: {current_question[:50] if current_question else 'None'}")
             
             if not current_market_id:
                 print("[错误] 市场 condition_id 为空")
