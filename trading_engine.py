@@ -539,8 +539,8 @@ class TradingEngine:
                         print(f"       question: {str(m.get('question', ''))[:50]}")
                 
                 # 必须找到5分钟比特币市场
-                if btc_5min_markets:
-                    current_market = btc_5min_markets[0]
+                if markets:
+                    current_market = markets[0]
                     question = current_market.get('question', 'Unknown')
                     slug = current_market.get('slug', '')
                     print(f"[市场] 5分钟BTC预测: {question[:60]}...")
