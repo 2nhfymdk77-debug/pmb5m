@@ -645,12 +645,17 @@ class PolymarketClient:
                 events = response.json()
                 print(f"[*] 获取到 {len(events)} 个活跃事件")
                 
-                # 调试：打印前5个事件的slug
-                print(f"[调试] 前5个事件slug:")
-                for i, event in enumerate(events[:5]):
+                # 调试：打印前10个事件的slug
+                print(f"[调试] 前10个事件slug:")
+                for i, event in enumerate(events[:10]):
                     slug = event.get("slug", "")
                     title = event.get("title", "")[:40]
                     print(f"    {i+1}. {slug} - {title}")
+                
+                # 查找是否有任何包含 btc 或 updown 的 slug
+                btc_slugs = [e.get("slug", "") for e in events if "btc" in e.get("slug", "").lower() or "updown" in e.get("slug", "").lower()]
+                if btc_slugs:
+                    print(f"[调试] 包含btc/updown的slug: {btc_slugs}")
                 
                 result = []
                 for event in events:
