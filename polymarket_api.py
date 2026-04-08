@@ -473,6 +473,13 @@ class PolymarketClient:
                 # 尝试自动创建凭证
                 print("[!] .env 中凭证无效，尝试自动创建...")
 
+            # 自动检测签名类型
+            if signature_type == 2 and private_key:
+                print("[!] 警告: signature_type=2 (GNOSIS_SAFE) 但提供了私钥")
+                print("[*] 自动切换到 signature_type=0 (EOA) 使用私钥签名")
+                signature_type = 0
+                self.signature_type = 0
+            
             # 添加签名类型（注意：0 是有效值，必须用 is not None 判断）
             if signature_type is not None:
                 client_args["signature_type"] = signature_type
