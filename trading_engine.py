@@ -308,7 +308,8 @@ class TradingEngine:
         market_slug = "Unknown"
         condition_id = self.config.market_id if self.config.market_id else "Unknown"
         
-        print(f"[诊断] market_id: {self.config.market_id[:30] if self.config.market_id else 'None'}...")
+        print(f"[诊断] 确认页 - market_id: {self.config.market_id[:30] if self.config.market_id else 'None'}...")
+        print(f"[诊断] 确认页 - market_data: {market_data}")
         
         if self.config.market_id:
             try:
@@ -400,10 +401,13 @@ class TradingEngine:
 
         try:
             # 1. 获取市场数据（带重试）
+            print("[诊断] 开始获取市场数据...")
             market_data = None
             while retry_count < max_retries:
                 market_data = self.fetch_market_data()
+                print(f"[诊断] fetch_market_data 返回: {type(market_data)}")
                 if market_data:
+                    print(f"[诊断] market_data keys: {list(market_data.keys()) if isinstance(market_data, dict) else 'N/A'}")
                     break
                 retry_count += 1
                 if retry_count < max_retries:
@@ -725,6 +729,7 @@ class TradingEngine:
 
         except Exception as e:
             self.error_handler.handle(e, "获取市场数据", recoverable=True)
+            print(f"[诊断] 获取市场数据异常: {e}")
             self.api_status = "error"
             return None
 
