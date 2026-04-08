@@ -1468,11 +1468,34 @@ class PolymarketClient:
             
             print(f"[诊断] 正在调用 post_order...")
             
-            # post_order: 提交订单
-            response = self.client.post_order(
-                signed_order,
-                orderType=order_type_enum,
-            )
+            # 添加重试机制处理 service not ready
+            max_retries = 3
+            retry_delay = 2
+            response = None
+            
+            for attempt in range(max_retries):
+                try:
+                    response = self.client.post_order(
+                        signed_order,
+                        orderType=order_type_enum,
+                    )
+                    
+                    # 检查是否成功
+                    if response and response.get("success") != False:
+                        break
+                    else:
+                        error_msg = response.get("errorMsg", "") if response else ""
+                        if "service not ready" in str(error_msg).lower() and attempt < max_retries - 1:
+                            print(f"[诊断] 服务未就绪，等待 {retry_delay} 秒后重试...")
+                            time.sleep(retry_delay)
+                            continue
+                        break
+                except Exception as e:
+                    if "service not ready" in str(e).lower() and attempt < max_retries - 1:
+                        print(f"[诊断] 服务未就绪，等待 {retry_delay} 秒后重试...")
+                        time.sleep(retry_delay)
+                        continue
+                    raise
 
             # 解析响应
             if response:
