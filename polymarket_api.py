@@ -1036,9 +1036,9 @@ class PolymarketClient:
             # 1. 检查当前授权状态
             print("[*] 检查授权状态...")
             try:
-                # 绕过 SDK 的 bug：必须传入 BalanceAllowanceParams 对象
-                from py_clob_client.clob_types import BalanceAllowanceParams
-                params = BalanceAllowanceParams()
+                # 绕过 SDK 的 bug：必须传入 BalanceAllowanceParams 对象，且需要指定 asset_type
+                from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+                params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
                 allowance_info = self.client.get_balance_allowance(params)
                 if allowance_info and isinstance(allowance_info, dict):
                     result["balance"] = float(allowance_info.get("balance", 0) or 0)
@@ -1094,9 +1094,9 @@ class PolymarketClient:
             # 3. 再次检查余额确认
             if result["initialized"]:
                 try:
-                    # 绕过 SDK 的 bug
-                    from py_clob_client.clob_types import BalanceAllowanceParams
-                    params = BalanceAllowanceParams()
+                    # 绕过 SDK 的 bug：必须指定 asset_type
+                    from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+                    params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
                     resp = self.client.get_balance_allowance(params)
                     if resp:
                         if isinstance(resp, dict):
