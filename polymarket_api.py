@@ -450,12 +450,12 @@ class PolymarketClient:
                 else:
                     print("[!] 现有凭证无效，将尝试自动创建...")
 
-            # 添加签名类型
-            if signature_type:
+            # 添加签名类型（注意：0 是有效值，必须用 is not None 判断）
+            if signature_type is not None:
                 client_args["signature_type"] = signature_type
 
             # 添加 funder 地址
-            if funder_address:
+            if funder_address is not None:
                 client_args["funder"] = funder_address
 
             self.client = ClobClient(**client_args)
