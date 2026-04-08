@@ -546,7 +546,7 @@ class TradingEngine:
                 current_slug = f"btc-updown-5m-{next_period_ts}"
                 
                 print(f"[*] 美东时间: {now_edt.strftime('%Y-%m-%d %H:%M:%S')}")
-                print(f"[*] 下一个5分钟周期: {next_period_start.strftime('%H:%M')}")
+                print(f"[*] 下一个5分钟周期: {next_period_start.strftime('%H:%M')} (时间戳: {next_period_ts})")
                 print(f"[*] 尝试获取BTC 5分钟市场: {current_slug}")
                 
                 market = self.client.get_market_by_slug(current_slug)
@@ -648,6 +648,19 @@ class TradingEngine:
 
             yes_price = prices.get("YES", 0)
             no_price = prices.get("NO", 0)
+
+            # 获取市场详情用于调试
+            try:
+                market_info = self.client.get_market_by_id(self.config.market_id)
+                if market_info:
+                    print(f"\n[诊断] 正在交易的市场:")
+                    print(f"  - question: {market_info.get('question', '')[:60]}")
+                    print(f"  - slug: {market_info.get('slug', '')}")
+                    print(f"  - condition_id: {self.config.market_id[:20]}...")
+                    print(f"  - YES token: {self.yes_token_id[:20]}...")
+                    print(f"  - NO token: {self.no_token_id[:20]}...")
+            except:
+                pass
 
             # 获取订单簿（失败不影响主流程）
             try:
