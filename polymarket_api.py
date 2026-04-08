@@ -456,19 +456,22 @@ class PolymarketClient:
             print(f"  - api_secret: {'已设置('+str(len(api_secret))+'位)' if api_secret else '空'}")
             print(f"  - passphrase: {'已设置('+str(len(passphrase))+'位)' if passphrase else '空'}")
             
-            # 只有当凭证都是非空字符串时才使用
-            if api_key and api_secret and passphrase:
-                # 验证凭证不是占位符或旧值
-                if len(api_key) > 10 and len(api_secret) > 10 and len(passphrase) > 5:
-                    self.api_credentials = ApiCreds(
-                        api_key=api_key,
-                        api_secret=api_secret,
-                        api_passphrase=passphrase
-                    )
-                    client_args["creds"] = self.api_credentials
-                    print("[*] 使用现有 API 凭证")
-                else:
-                    print("[!] 现有凭证无效，将尝试自动创建...")
+            # 凭证来源判断
+            has_valid_creds_from_env = bool(api_key and api_secret and passphrase and 
+                                          len(api_key) > 10 and len(api_secret) > 10 and len(passphrase) > 5)
+            
+            if has_valid_creds_from_env:
+                # 使用 .env 中的凭证
+                self.api_credentials = ApiCreds(
+                    api_key=api_key,
+                    api_secret=api_secret,
+                    api_passphrase=passphrase
+                )
+                client_args["creds"] = self.api_credentials
+                print("[*] 使用 .env 中的 API 凭证")
+            else:
+                # 尝试自动创建凭证
+                print("[!] .env 中凭证无效，尝试自动创建...")
 
             # 添加签名类型（注意：0 是有效值，必须用 is not None 判断）
             if signature_type is not None:
@@ -485,8 +488,8 @@ class PolymarketClient:
             self.heartbeat_manager = HeartbeatManager(self.client)
             self.heartbeat_manager.start()
 
-            # 总是尝试自动创建 API 凭证（如果私钥有效）
-            if self.private_key:
+            # 只有当 .env 中凭证无效时，才尝试自动创建
+            if not has_valid_creds_from_env and self.private_key:
                 print("[!] 正在尝试自动创建 API 凭证...")
                 if self.create_api_credentials():
                     print("[OK] API 凭证创建成功")
@@ -495,7 +498,10 @@ class PolymarketClient:
                     self._reinit_client_with_credentials()
                     print("[OK] 客户端重新初始化完成")
                 else:
-                    print("[!] API 凭证创建失败，将尝试使用提供的凭证")
+                    print("[!] API 凭证创建失败")
+                    print("[!] 请在 Polymarket 网站创建新的 API 密钥并填入 .env 文件")
+            elif has_valid_creds_from_env:
+                print("[*] 跳过自动创建，使用 .env 中的凭证")
 
         except Exception as e:
             print(f"[X] 初始化客户端失败: {e}")
