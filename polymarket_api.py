@@ -690,6 +690,9 @@ class PolymarketClient:
             if response.status_code == 200:
                 markets = response.json()
                 print(f"[*] 获取到 {len(markets)} 个活跃市场")
+                # 打印前5个市场的slug用于调试
+                for i, m in enumerate(markets[:5]):
+                    print(f"    [{i+1}] {m.get('slug', 'N/A')[:60]} - {m.get('question', 'N/A')[:40]}")
                 return markets
             else:
                 print(f"获取活跃市场失败: {response.status_code} - {response.text[:200]}")

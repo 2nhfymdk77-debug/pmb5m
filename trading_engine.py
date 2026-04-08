@@ -547,6 +547,7 @@ class TradingEngine:
 
         try:
             # 获取最新活跃市场列表（专门获取BTC 5分钟市场）
+            print("[诊断] >>> 进入 fetch_real_market_data")
             try:
                 # 计算正确的5分钟周期slug（美东时间）
                 from datetime import datetime, timezone, timedelta
@@ -583,14 +584,17 @@ class TradingEngine:
                 print(f"[*] 尝试获取BTC 5分钟市场: {current_slug}")
                 
                 market = self.client.get_market_by_slug(current_slug)
+                print(f"[诊断] get_market_by_slug 返回: {type(market)}, 是否有值: {bool(market)}")
                 if market:
                     print(f"[OK] 找到市场: {market.get('question', '')[:50]}")
                     markets = [market]
                 else:
                     print("[*] 直接获取失败，从列表中搜索...")
                     markets = self.client.get_btc_5min_markets(limit=10)
+                    print(f"[诊断] get_btc_5min_markets 返回: {len(markets)} 个市场")
                     if not markets:
                         markets = self.client.get_tradable_markets(limit=100)
+                        print(f"[诊断] get_tradable_markets 返回: {len(markets)} 个市场")
                         # 从全部市场中过滤BTC 5分钟（更宽松匹配）
                         btc_5min = []
                         for m in markets:
@@ -602,9 +606,13 @@ class TradingEngine:
                                 if ('5m' in slug or '5 min' in title or '5 min' in question or 'updown' in slug):
                                     btc_5min.append(m)
                         markets = btc_5min
+                        print(f"[诊断] BTC 5分钟过滤后: {len(markets)} 个市场")
                 
                 if not markets:
+                    print("[错误] 无法获取活跃市场列表")
                     raise TradingError("无法获取活跃市场列表")
+                
+                print(f"[诊断] 找到 {len(markets)} 个市场，使用第一个")
                 
                 # 调试：打印前3个市场
                 if len(markets) > 0:
