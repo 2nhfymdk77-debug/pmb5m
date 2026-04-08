@@ -656,19 +656,28 @@ class TradingEngine:
     def calculate_position_size(self) -> float:
         """计算仓位大小
         
-        使用从 Polymarket API 读取的真实初始余额计算仓位
+        策略：
+        - 每次用余额的 1/12 开仓
+        - 当余额 > 初始余额 × 3^n 时，开仓金额扩大 2^n 倍
         """
         # 使用从 API 读取的初始余额，而非配置值
         initial_balance = self.initial_balance if self.initial_balance > 0 else self.config.initial_balance
-        initial_position = self.config.initial_position
-
-        ratio = self.balance / initial_balance
-        n = int(math.log(ratio, 3)) if ratio >= 1 else 0
-
-        position_size = initial_position * (2 ** n)
+        
+        # 基础开仓 = 余额的 1/12
+        base_position = self.balance / 12.0
+        
+        # 计算倍数：余额是初始余额的 3^n 时，开仓扩大 2^n 倍
+        if self.balance >= initial_balance * 3:
+            n = int(math.log(self.balance / initial_balance, 3))
+            multiplier = 2 ** n
+        else:
+            multiplier = 1
+        
+        position_size = base_position * multiplier
         position_size = math.floor(position_size)
-
-        return position_size
+        
+        # 确保最小开仓金额为 1
+        return max(1.0, position_size)
 
     def place_dual_orders(self, position_size: float) -> None:
         """
