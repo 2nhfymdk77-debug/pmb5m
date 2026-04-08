@@ -791,6 +791,10 @@ class TradingEngine:
         - 使用 create_and_post_order() 一步完成创建、签名和提交
         - GTC: Good Till Cancelled - 挂单直到成交或取消
         
+        重要：Polymarket 订单最小金额为 $1
+        - 订单金额 = 价格 × 数量
+        - 如果价格 0.75，数量至少需要 2（金额 $1.5）
+        
         正确逻辑：
         - YES 和 NO 是两个不同的代币
         - 同时挂两个买入单：BUY YES @ 75 和 BUY NO @ 75
@@ -799,10 +803,27 @@ class TradingEngine:
         注意：这里没有做空操作，都是做多！
         """
         entry_price = self.config.entry_price
-        # 转换为 0-1 格式显示
-        entry_display = entry_price / 100.0 if entry_price > 1 else entry_price
+        # 转换为 0-1 格式
+        entry_price_float = entry_price / 100.0 if entry_price > 1 else entry_price
+        entry_display = entry_price_float
 
+        # 计算实际数量（股数）
+        # Polymarket 订单金额 = 价格 × 数量
+        # 最小订单金额 = $1
+        # 数量 = 开仓金额 / 价格，向上取整
+        raw_size = position_size / entry_price_float
+        # 向上取整，确保是整数
+        import math
+        actual_size = math.ceil(raw_size)
+        # 确保订单金额 >= $1
+        order_value = actual_size * entry_price_float
+        if order_value < 1.0:
+            actual_size = math.ceil(1.0 / entry_price_float)
+        
         print(f"[挂单] 挂双向限价单 @ ${entry_display:.2f}")
+        print(f"[挂单] 开仓金额: ${position_size:.2f}，价格: ${entry_price_float:.2f}")
+        print(f"[挂单] 计算数量: {raw_size:.2f} → 实际数量: {actual_size} 股")
+        print(f"[挂单] 订单金额: ${actual_size * entry_price_float:.2f}")
 
         # 真实API模式：实际挂单
         if not self.yes_token_id or not self.no_token_id:
@@ -824,7 +845,7 @@ class TradingEngine:
             yes_order = self.client.create_order(
                 token_id=self.yes_token_id,
                 price=entry_price,
-                size=position_size,
+                size=float(actual_size),  # 使用计算的数量
                 side="BUY",
                 order_type="GTC",  # Good Till Cancelled
             )
@@ -835,7 +856,7 @@ class TradingEngine:
             no_order = self.client.create_order(
                 token_id=self.no_token_id,
                 price=entry_price,
-                size=position_size,
+                size=float(actual_size),  # 使用计算的数量
                 side="BUY",
                 order_type="GTC",
             )
@@ -857,7 +878,7 @@ class TradingEngine:
                     "token": "YES",
                     "token_id": self.yes_token_id,
                     "price": entry_price,
-                    "size": position_size,
+                    "size": actual_size,
                 }
             if no_order_id:
                 self.pending_orders[no_order_id] = {
@@ -865,7 +886,7 @@ class TradingEngine:
                     "token": "NO",
                     "token_id": self.no_token_id,
                     "price": entry_price,
-                    "size": position_size,
+                    "size": actual_size,
                 }
 
             print(f"[挂单] [OK] 双向限价单已挂: YES @ ${entry_display:.2f} | NO @ ${entry_display:.2f}")
