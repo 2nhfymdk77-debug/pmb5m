@@ -625,6 +625,71 @@ class PolymarketClient:
 
     # ==================== 余额方法 ====================
 
+    def check_and_initialize_allowance(self) -> Dict[str, Any]:
+        """检查并初始化授权状态"""
+        result = {
+            "balance": 0.0,
+            "allowance": 0.0,
+            "initialized": False,
+            "error": None
+        }
+        
+        if not self.client:
+            result["error"] = "Client not initialized"
+            return result
+
+        try:
+            params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
+            allowance_info = self.client.get_balance_allowance(params)
+            
+            print(f"[*] 检查授权状态...")
+            
+            if allowance_info and isinstance(allowance_info, dict):
+                # 获取余额
+                raw_balance = allowance_info.get("balance", 0) or 0
+                try:
+                    balance = float(str(raw_balance).strip('"'))
+                except:
+                    balance = 0.0
+                
+                # USDC 余额以微单位返回，需要转换
+                if balance > 10000:
+                    balance = balance / 1000000
+                
+                result["balance"] = balance
+                
+                # 获取授权额度
+                allowances = allowance_info.get("allowances", {})
+                if isinstance(allowances, dict) and allowances:
+                    raw_allowance = list(allowances.values())[0]
+                    try:
+                        allowance = float(str(raw_allowance))
+                    except:
+                        allowance = 0.0
+                    
+                    # 检查是否是无限授权
+                    if allowance > 1e50:
+                        result["allowance"] = float("inf")
+                        print(f"[*] 授权额度: 无限")
+                    elif allowance > 10000:
+                        result["allowance"] = allowance / 1000000
+                        print(f"[*] 授权额度: ${result['allowance']:.2f}")
+                    else:
+                        result["allowance"] = allowance
+                
+                print(f"[*] 当前余额: ${balance:.2f}")
+                
+                # 如果余额 > 0，认为已初始化
+                if balance > 0:
+                    result["initialized"] = True
+                    
+        except Exception as e:
+            print(f"[!] 检查授权失败: {e}")
+            result["error"] = str(e)
+            result["initialized"] = True  # 继续运行，不阻塞
+
+        return result
+
     def get_balance(self) -> float:
         """获取账户余额"""
         if not self.client:
