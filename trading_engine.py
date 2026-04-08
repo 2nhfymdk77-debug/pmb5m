@@ -513,9 +513,14 @@ class TradingEngine:
             f.write(f"\n=== fetch_real_market_data ===\n")
 
         try:
-            # 获取最新活跃市场列表
+            # 获取最新活跃市场列表（优先从加密市场获取）
             try:
-                markets = self.client.get_tradable_markets(limit=100)
+                # 首先尝试获取加密市场
+                markets = self.client.get_crypto_markets(limit=50)
+                if not markets:
+                    print("[*] 加密市场为空，尝试获取全部活跃市场...")
+                    markets = self.client.get_tradable_markets(limit=100)
+                
                 if not markets:
                     raise TradingError("无法获取活跃市场列表")
                 

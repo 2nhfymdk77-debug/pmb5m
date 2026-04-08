@@ -593,6 +593,64 @@ class PolymarketClient:
             print(f"获取可交易市场失败: {e}")
             return []
 
+    def get_crypto_markets(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """获取加密货币市场（专门用于BTC 5分钟预测）"""
+        if not self.client:
+            return []
+        try:
+            import requests
+            # 首先获取加密标签
+            tags_response = requests.get(
+                "https://gamma-api.polymarket.com/tags",
+                timeout=10
+            )
+            crypto_tag_id = None
+            
+            if tags_response.status_code == 200:
+                tags = tags_response.json()
+                # 查找加密相关标签
+                for tag in tags:
+                    tag_name = tag.get("name", "").lower()
+                    if "crypto" in tag_name or "bitcoin" in tag_name:
+                        crypto_tag_id = tag.get("id")
+                        print(f"[*] 找到加密标签: {tag.get('name')}, ID: {crypto_tag_id}")
+                        break
+            
+            # 如果没找到，使用默认参数获取事件
+            url = "https://gamma-api.polymarket.com/events"
+            params = {
+                "active": "true",
+                "closed": "false",
+                "limit": limit,
+                "order": "created_at",
+                "ascending": "false"
+            }
+            
+            if crypto_tag_id:
+                params["tag_id"] = crypto_tag_id
+            
+            response = requests.get(url, params=params, timeout=10)
+            if response.status_code == 200:
+                events = response.json()
+                print(f"[*] 获取到 {len(events)} 个加密事件")
+                
+                # 提取市场信息
+                result = []
+                for event in events:
+                    markets = event.get("markets", [])
+                    for market in markets:
+                        market_copy = market.copy()
+                        market_copy["slug"] = event.get("slug", "")
+                        market_copy["event_title"] = event.get("title", "")
+                        result.append(market_copy)
+                return result
+            else:
+                print(f"获取加密事件失败: {response.status_code}")
+                return []
+        except Exception as e:
+            print(f"获取加密市场失败: {e}")
+            return []
+
     def get_market_by_slug(self, slug: str) -> Optional[Dict[str, Any]]:
         """通过slug获取市场"""
         if not self.client:
