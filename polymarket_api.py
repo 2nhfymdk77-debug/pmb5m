@@ -420,13 +420,13 @@ class PolymarketClient:
             self.heartbeat_manager = HeartbeatManager(self.client)
             self.heartbeat_manager.start()
 
-            # 如果没有完整的 API 凭证，自动创建
-            if not (api_key and api_secret and passphrase):
-                print("[!] 缺少 API 凭证，正在自动创建...")
+            # 总是尝试自动创建 API 凭证（如果私钥有效）
+            if self.private_key:
+                print("[!] 正在尝试自动创建 API 凭证...")
                 if self.create_api_credentials():
-                    print("[ API 凭证创建成功")
+                    print("[OK] API 凭证创建成功")
                 else:
-                    print("[X] API 凭证创建失败，将使用 L1 认证")
+                    print("[!] API 凭证创建失败，将尝试使用提供的凭证")
 
         except Exception as e:
             print(f"[X] 初始化客户端失败: {e}")
