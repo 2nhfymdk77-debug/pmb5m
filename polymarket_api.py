@@ -563,13 +563,13 @@ class PolymarketClient:
             return []
 
     def get_tradable_markets(self, limit: int = 100) -> List[Dict[str, Any]]:
-        """获取可交易市场（使用Gamma API获取活跃事件）"""
+        """获取可交易市场（使用Gamma API获取活跃市场）"""
         if not self.client:
             return []
         try:
             import requests
-            # 使用 Gamma API 获取活跃事件（包含 slug）
-            url = "https://gamma-api.polymarket.com/events"
+            # 使用 /markets 端点获取活跃市场（官方推荐）
+            url = "https://gamma-api.polymarket.com/markets"
             params = {
                 "active": "true",
                 "closed": "false",
@@ -581,21 +581,11 @@ class PolymarketClient:
             }
             response = requests.get(url, params=params, headers=headers, timeout=10)
             if response.status_code == 200:
-                events = response.json()
-                print(f"[*] 获取到 {len(events)} 个活跃事件")
-                # 事件包含 markets 数组，我们需要提取市场信息
-                result = []
-                for event in events:
-                    markets = event.get("markets", [])
-                    for market in markets:
-                        # 将事件信息添加到市场信息中
-                        market_copy = market.copy()
-                        market_copy["slug"] = event.get("slug", "")
-                        market_copy["event_title"] = event.get("title", "")
-                        result.append(market_copy)
-                return result
+                markets = response.json()
+                print(f"[*] 获取到 {len(markets)} 个活跃市场")
+                return markets
             else:
-                print(f"获取活跃事件失败: {response.status_code} - {response.text[:200]}")
+                print(f"获取活跃市场失败: {response.status_code} - {response.text[:200]}")
                 return []
         except Exception as e:
             print(f"获取可交易市场失败: {e}")
@@ -605,20 +595,18 @@ class PolymarketClient:
         """通过 slug 获取市场详情（官方推荐方式）"""
         try:
             import requests
-            url = f"https://gamma-api.polymarket.com/events?slug={slug}"
+            # 使用 /markets 端点 + slug 参数
+            url = "https://gamma-api.polymarket.com/markets"
+            params = {"slug": slug}
             headers = {"Accept": "application/json"}
-            response = requests.get(url, headers=headers, timeout=10)
+            response = requests.get(url, params=params, headers=headers, timeout=10)
             
             if response.status_code == 200:
-                events = response.json()
-                if events and len(events) > 0:
-                    event = events[0]
-                    markets = event.get("markets", [])
-                    if markets:
-                        market = markets[0]
-                        market["slug"] = event.get("slug", "")
-                        market["event_title"] = event.get("title", "")
-                        return market
+                markets = response.json()
+                if markets and len(markets) > 0:
+                    market = markets[0]
+                    market["slug"] = slug
+                    return market
                 print(f"[!] 未找到市场: {slug}")
                 return None
             else:
@@ -632,7 +620,8 @@ class PolymarketClient:
         """专门获取BTC 5分钟预测市场"""
         try:
             import requests
-            url = "https://gamma-api.polymarket.com/events"
+            # 使用 /markets 端点获取活跃市场
+            url = "https://gamma-api.polymarket.com/markets"
             params = {
                 "active": "true",
                 "closed": "false",
@@ -642,34 +631,26 @@ class PolymarketClient:
             response = requests.get(url, params=params, headers=headers, timeout=10)
             
             if response.status_code == 200:
-                events = response.json()
-                print(f"[*] 获取到 {len(events)} 个活跃事件")
+                markets = response.json()
+                print(f"[*] 获取到 {len(markets)} 个活跃市场")
                 
-                # 调试：打印前10个事件的slug
-                print(f"[调试] 前10个事件slug:")
-                for i, event in enumerate(events[:10]):
-                    slug = event.get("slug", "")
-                    title = event.get("title", "")[:40]
-                    print(f"    {i+1}. {slug} - {title}")
+                # 调试：打印前10个市场的slug
+                print(f"[调试] 前10个市场slug:")
+                for i, market in enumerate(markets[:10]):
+                    slug = market.get("slug", "")
+                    question = market.get("question", "")[:40]
+                    print(f"    {i+1}. {slug} - {question}")
                 
-                # 查找是否有任何包含 btc 或 updown 的 slug
-                btc_slugs = [e.get("slug", "") for e in events if "btc" in e.get("slug", "").lower() or "updown" in e.get("slug", "").lower()]
-                if btc_slugs:
-                    print(f"[调试] 包含btc/updown的slug: {btc_slugs}")
-                
+                # 查找BTC 5分钟市场
                 result = []
-                for event in events:
-                    slug = event.get("slug", "").lower()
+                for market in markets:
+                    slug = market.get("slug", "").lower()
                     # 匹配 btc-updown-5m-xxx 格式
                     if "btc-updown-5m" in slug:
-                        markets = event.get("markets", [])
-                        for market in markets:
-                            market_copy = market.copy()
-                            market_copy["slug"] = event.get("slug", "")
-                            market_copy["event_title"] = event.get("title", "")
-                            result.append(market_copy)
+                        result.append(market)
                         if len(result) >= limit:
                             break
+                
                 print(f"[*] 匹配到 {len(result)} 个BTC 5分钟市场")
                 return result
             else:
@@ -685,56 +666,24 @@ class PolymarketClient:
             return []
         try:
             import requests
-            # 首先获取加密标签
-            tags_response = requests.get(
-                "https://gamma-api.polymarket.com/tags",
-                headers={"Accept": "application/json"},
-                timeout=10
-            )
-            crypto_tag_id = None
-            
-            if tags_response.status_code == 200:
-                tags = tags_response.json()
-                # 查找加密相关标签
-                for tag in tags:
-                    tag_name = tag.get("name", "").lower()
-                    if "crypto" in tag_name or "bitcoin" in tag_name:
-                        crypto_tag_id = tag.get("id")
-                        print(f"[*] 找到加密标签: {tag.get('name')}, ID: {crypto_tag_id}")
-                        break
-            
-            # 使用默认参数获取事件
-            url = "https://gamma-api.polymarket.com/events"
+            # 使用 /markets 端点获取活跃市场
+            url = "https://gamma-api.polymarket.com/markets"
             params = {
                 "active": "true",
                 "closed": "false",
                 "limit": limit
             }
-            
-            if crypto_tag_id:
-                params["tag_id"] = crypto_tag_id
-            
             headers = {
                 "Content-Type": "application/json",
                 "Accept": "application/json"
             }
             response = requests.get(url, params=params, headers=headers, timeout=10)
             if response.status_code == 200:
-                events = response.json()
-                print(f"[*] 获取到 {len(events)} 个事件")
-                
-                # 提取市场信息
-                result = []
-                for event in events:
-                    markets = event.get("markets", [])
-                    for market in markets:
-                        market_copy = market.copy()
-                        market_copy["slug"] = event.get("slug", "")
-                        market_copy["event_title"] = event.get("title", "")
-                        result.append(market_copy)
-                return result
+                markets = response.json()
+                print(f"[*] 获取到 {len(markets)} 个市场")
+                return markets
             else:
-                print(f"获取加密事件失败: {response.status_code}")
+                print(f"获取加密市场失败: {response.status_code}")
                 return []
         except Exception as e:
             print(f"获取加密市场失败: {e}")
