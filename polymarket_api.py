@@ -819,11 +819,20 @@ class PolymarketClient:
             creds_obj = self.client.create_or_derive_api_creds()
             print(f"[*] 返回类型: {type(creds_obj)}")
             print(f"[*] 返回内容: {creds_obj}")
-
+            
+            if creds_obj is None:
+                print("[X] create_or_derive_api_creds() 返回 None")
+                return None
+            
             # ApiCreds 对象的属性访问（注意：属性名是 api_key, api_secret, api_passphrase）
-            self.api_key = creds_obj.api_key
-            self.api_secret = creds_obj.api_secret
-            self.passphrase = creds_obj.api_passphrase
+            try:
+                self.api_key = creds_obj.api_key
+                self.api_secret = creds_obj.api_secret
+                self.passphrase = creds_obj.api_passphrase
+                print(f"[*] 提取凭证成功: api_key={self.api_key[:10]}...")
+            except AttributeError as e:
+                print(f"[X] ApiCreds 对象缺少属性: {e}")
+                return None
 
             # 创建 ApiCreds 对象供 SDK 使用
             credentials = ApiCreds(
@@ -903,6 +912,13 @@ class PolymarketClient:
                 print("[*] 旧心跳管理器已停止")
 
             # 重新初始化客户端（使用已创建的凭证）
+            print(f"[*] 重新初始化客户端，凭证类型: {type(self.api_credentials)}")
+            print(f"[*] 凭证内容: {self.api_credentials}")
+            
+            if self.api_credentials is None:
+                print("[X] 凭证为 None，无法重新初始化客户端")
+                return False
+            
             self.client = ClobClient(
                 host="https://clob.polymarket.com",
                 chain_id=137,  # Polygon
@@ -910,6 +926,9 @@ class PolymarketClient:
                 creds=self.api_credentials,  # 使用新创建的凭证
                 signature_type=2  # L2 签名
             )
+            
+            # 验证客户端是否正确初始化
+            print(f"[*] 新客户端的 creds: {self.client.creds}")
             print("[OK] CLOBClient 重新初始化成功")
 
             # 重新启动心跳管理器
@@ -953,7 +972,10 @@ class PolymarketClient:
             # 1. 检查当前授权状态
             print("[*] 检查授权状态...")
             try:
-                allowance_info = self.client.get_balance_allowance()
+                # 绕过 SDK 的 bug：必须传入 BalanceAllowanceParams 对象
+                from py_clob_client.clob_types import BalanceAllowanceParams
+                params = BalanceAllowanceParams()
+                allowance_info = self.client.get_balance_allowance(params)
                 if allowance_info and isinstance(allowance_info, dict):
                     result["balance"] = float(allowance_info.get("balance", 0) or 0)
                     result["allowance"] = float(allowance_info.get("allowance", 0) or 0)
@@ -1008,8 +1030,10 @@ class PolymarketClient:
             # 3. 再次检查余额确认
             if result["initialized"]:
                 try:
-                    # 使用 get_balance_allowance 而不是不存在的 get_balance
-                    resp = self.client.get_balance_allowance()
+                    # 绕过 SDK 的 bug
+                    from py_clob_client.clob_types import BalanceAllowanceParams
+                    params = BalanceAllowanceParams()
+                    resp = self.client.get_balance_allowance(params)
                     if resp:
                         if isinstance(resp, dict):
                             balance = resp.get("balance", 0)
@@ -1062,7 +1086,12 @@ class PolymarketClient:
         # 方法1: 使用 get_balance_allowance（SDK 推荐方式）
         try:
             print("[*] get_balance: 尝试 get_balance_allowance...")
-            resp = self.client.get_balance_allowance()
+            
+            # 绕过 SDK 的 bug：必须传入 BalanceAllowanceParams 对象，不能是 None
+            from py_clob_client.clob_types import BalanceAllowanceParams
+            params = BalanceAllowanceParams()
+            
+            resp = self.client.get_balance_allowance(params)
             print(f"[*] get_balance: 响应类型 = {type(resp)}, 内容 = {resp}")
             
             if resp is None:
@@ -1084,7 +1113,9 @@ class PolymarketClient:
     def _get_balance_direct(self) -> float:
         """方法1: 直接获取余额（保留兼容性）"""
         try:
-            resp = self.client.get_balance_allowance()
+            from py_clob_client.clob_types import BalanceAllowanceParams
+            params = BalanceAllowanceParams()
+            resp = self.client.get_balance_allowance(params)
             if resp and isinstance(resp, (dict, float, int)):
                 if isinstance(resp, dict):
                     return float(resp.get("balance", 0) or 0)
