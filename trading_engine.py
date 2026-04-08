@@ -781,6 +781,16 @@ class TradingEngine:
         last_status_log = 0  # 上次输出状态的时间
 
         while time.time() - start_time < max_wait:
+            # 每秒获取最新价格
+            try:
+                prices = self.client.get_market_prices(self.config.market_id)
+                if prices:
+                    elapsed = int(time.time() - start_time)
+                    remaining = max_wait - elapsed
+                    print(f"\r[等待] YES ${prices.get('YES', 0):.2f} | NO ${prices.get('NO', 0):.2f} | 剩余 {remaining}s    ", end="", flush=True)
+            except Exception:
+                pass
+            
             # 检查订单状态
             for order_id in list(self.pending_orders.keys()):
                 try:
@@ -1106,8 +1116,8 @@ class TradingEngine:
                 except Exception:
                     pass
 
-            # 每15秒检查一次价格并输出状态
-            if current_time - last_price_log >= 15:
+            # 每秒更新一次价格
+            if current_time - last_price_log >= 1:
                 try:
                     prices = self.client.get_market_prices(self.config.market_id)
                     if prices:
