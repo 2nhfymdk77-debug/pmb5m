@@ -716,11 +716,31 @@ class PolymarketClient:
             response = requests.get(url, params=params, headers=headers, timeout=10)
             
             if response.status_code == 200:
-                markets = response.json()
-                if markets and len(markets) > 0:
-                    market = markets[0]
+                data = response.json()
+                print(f"[*] get_market_by_slug 响应类型: {type(data)}, 长度: {len(data) if isinstance(data, list) else 'N/A'}")
+                
+                if isinstance(data, list) and len(data) > 0:
+                    market = data[0]
+                    print(f"[*] 市场 keys: {list(market.keys())}")
+                    print(f"[*] market['condition_id']: {market.get('condition_id', 'N/A')}")
+                    print(f"[*] market['id']: {market.get('id', 'N/A')}")
+                    print(f"[*] market['conditionId']: {market.get('conditionId', 'N/A')}")
+                    
+                    # 检查是否有嵌套的 condition_info
+                    if 'condition_info' in market:
+                        print(f"[*] condition_info: {market['condition_info']}")
+                    
+                    # 检查是否有 clobTokenIds
+                    if 'clobTokenIds' in market:
+                        print(f"[*] clobTokenIds: {market['clobTokenIds']}")
+                    
                     market["slug"] = slug
                     return market
+                elif isinstance(data, dict):
+                    print(f"[*] 响应是字典, keys: {list(data.keys())}")
+                    data["slug"] = slug
+                    return data
+                    
                 print(f"[!] 未找到市场: {slug}")
                 return None
             else:
@@ -728,6 +748,8 @@ class PolymarketClient:
                 return None
         except Exception as e:
             print(f"获取市场详情失败: {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
     def get_market_by_event_slug(self, event_slug: str) -> Optional[Dict[str, Any]]:
