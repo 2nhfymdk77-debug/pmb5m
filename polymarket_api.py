@@ -727,21 +727,6 @@ class PolymarketClient:
             print(f"获取加密市场失败: {e}")
             return []
 
-    def get_market_by_slug(self, slug: str) -> Optional[Dict[str, Any]]:
-        """通过slug获取市场"""
-        if not self.client:
-            return None
-        try:
-            response = self.client.get_markets(limit=1000)
-            markets = response.get("data", [])
-            for market in markets:
-                if market.get("slug") == slug:
-                    return market
-            return None
-        except Exception as e:
-            print(f"获取市场失败: {e}")
-            return None
-
     # ==================== 价格方法 ====================
 
     def get_midpoints(
