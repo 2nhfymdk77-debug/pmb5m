@@ -609,22 +609,25 @@ class PolymarketClient:
             return "Unknown"
     
     def get_market_by_token_id(self, token_id: str) -> Optional[Dict[str, Any]]:
-        """根据token_id获取市场详情（使用缓存）"""
+        """根据token_id获取市场详情"""
         if not token_id:
             return None
         
-        # 尝试从缓存获取
-        if token_id in self._market_details_cache:
-            return self._market_details_cache[token_id]
-        
-        # 从市场列表获取
-        for market in self._cached_markets:
-            if market.get("condition_info", {}).get("union_id") == token_id or \
-               market.get("clobTokenIds", []) and market["clobTokenIds"][0] == token_id:
-                self._market_details_cache[token_id] = market
-                return market
-        
-        return None
+        try:
+            # 直接从市场列表获取（避免缓存问题）
+            markets = self.get_markets(limit=100)
+            for market in markets:
+                clob_token_ids = market.get("clobTokenIds", [])
+                if clob_token_ids and clob_token_ids[0] == token_id:
+                    return market
+                # 也检查 condition_info
+                condition_info = market.get("condition_info", {})
+                if condition_info.get("union_id") == token_id:
+                    return market
+            return None
+        except Exception as e:
+            print(f"get_market_by_token_id 失败: {e}")
+            return None
 
     def get_markets(
         self, limit: int = 100, offset: int = 0
