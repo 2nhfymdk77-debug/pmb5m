@@ -728,6 +728,33 @@ class PolymarketClient:
             print(f"获取市场详情失败: {e}")
             return None
 
+    def get_market_by_event_slug(self, event_slug: str) -> Optional[Dict[str, Any]]:
+        """通过事件slug获取关联的市场详情（官方推荐方式）"""
+        try:
+            import requests
+            # 使用 /markets?slug=xxx 获取关联的市场
+            url = "https://gamma-api.polymarket.com/markets"
+            params = {"slug": event_slug}
+            headers = {"Accept": "application/json"}
+            response = requests.get(url, params=params, headers=headers, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                # 响应可能是列表或单个市场
+                if isinstance(data, list) and len(data) > 0:
+                    market = data[0]
+                    print(f"[*] 通过事件slug获取到市场: {market.get('slug', '')}")
+                    return market
+                elif isinstance(data, dict):
+                    return data
+                return None
+            else:
+                print(f"获取市场失败: {response.status_code}")
+                return None
+        except Exception as e:
+            print(f"获取市场详情失败: {e}")
+            return None
+
     def get_btc_5min_markets(self, limit: int = 10) -> List[Dict[str, Any]]:
         """专门获取BTC 5分钟预测市场（使用官方 Events API）"""
         try:

@@ -575,12 +575,20 @@ class TradingEngine:
                 print("[错误] 没有找到 BTC 5分钟事件")
                 return None
             
-            # 步骤3: 选择事件
-            current_market_id = btc_event.get("condition_id", "")
-            current_slug = btc_event.get("slug", "")
-            current_question = btc_event.get("question", "")
+            # 步骤3: 通过事件slug获取关联的市场详情
+            event_slug = btc_event.get("slug", "")
+            print(f"[诊断] 步骤3: 通过事件slug获取市场: {event_slug}")
             
-            print(f"[诊断] 步骤3: 选择事件")
+            market = self.client.get_market_by_event_slug(event_slug)
+            if not market:
+                print("[错误] 无法获取市场详情")
+                return None
+            
+            current_market_id = market.get("condition_id", "")
+            current_slug = market.get("slug", "")
+            current_question = market.get("question", "")
+            
+            print(f"[诊断] 步骤4: 选择市场")
             print(f"  condition_id: {current_market_id[:30] if current_market_id else 'None'}...")
             print(f"  slug: {current_slug}")
             print(f"  question: {current_question[:50]}")
