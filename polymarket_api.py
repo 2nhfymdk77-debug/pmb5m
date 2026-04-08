@@ -120,10 +120,11 @@ class HeartbeatManager:
     
     def __init__(self, client: ClobClient):
         self.client = client
-        self.heartbeat_id = ""
+        self.heartbeat_id = None  # 初始为 None，表示需要创建新心跳
         self._running = False
         self._thread = None
         self._interval = 5  # 每 5 秒发送一次心跳
+        self._initialized = False  # 是否已完成首次心跳初始化
     
     def start(self) -> None:
         """启动心跳"""
@@ -145,23 +146,37 @@ class HeartbeatManager:
         """心跳循环"""
         consecutive_failures = 0
         max_failures = 3  # 连续失败3次后减少日志频率
+        first_run = True
         
         while self._running:
             try:
-                resp = self.client.post_heartbeat(self.heartbeat_id)
+                # 第一次尝试：使用 None 或空字符串创建心跳
+                # 后续使用获取到的心跳 ID
+                hb_id = self.heartbeat_id if self.heartbeat_id else ""
+                
+                resp = self.client.post_heartbeat(hb_id)
                 if resp and "heartbeat_id" in resp:
                     self.heartbeat_id = resp["heartbeat_id"]
                     consecutive_failures = 0  # 重置失败计数
+                    first_run = False
+                    self._initialized = True
                 time.sleep(self._interval)
             except Exception as e:
                 consecutive_failures += 1
-                # 只有前3次失败才打印详细错误，之后静默
-                if consecutive_failures <= max_failures:
-                    error_msg = str(e)
-                    if "401" in error_msg or "Unauthorized" in error_msg:
+                error_msg = str(e)
+                
+                # 检查是否是 Invalid Heartbeat ID 错误
+                if "Invalid Heartbeat ID" in error_msg or "invalid" in error_msg.lower():
+                    # 心跳 ID 无效，重置为 None 重新创建
+                    self.heartbeat_id = None
+                    if consecutive_failures <= max_failures:
+                        print(f"[!] 心跳 ID 无效，将重新创建心跳")
+                elif first_run and ("401" in error_msg or "Unauthorized" in error_msg):
+                    if consecutive_failures <= max_failures:
                         print(f"[!] 心跳认证失败，请检查 API 凭证")
-                    else:
-                        print(f"[X] 心跳发送失败: {e}")
+                elif consecutive_failures <= max_failures:
+                    print(f"[X] 心跳发送失败: {e}")
+                    
                 time.sleep(self._interval)  # 即使失败也继续尝试
 
 
@@ -848,6 +863,7 @@ class PolymarketClient:
         except Exception as e:
             print(f"[X] 保存凭证失败: {e}")
             return False
+
     def _reinit_client_with_credentials(self) -> bool:
         """使用新创建的凭证重新初始化 CLOBClient"""
         try:
