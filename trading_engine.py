@@ -522,21 +522,23 @@ class TradingEngine:
                 # 只用于5分钟比特币预测市场 - 匹配 slug 格式
                 btc_5min_markets = []
                 for m in markets:
-                    slug = m.get('slug', '').lower()
-                    question = m.get('question', '').lower()
+                    slug = m.get('slug', '') or ''
+                    question = m.get('question', '') or ''
+                    slug_lower = slug.lower()
+                    question_lower = question.lower()
                     
                     # 匹配 btc-updown-5m 或包含 btc 和 5m 的 slug
                     # URL格式: btc-updown-5m-1775671800
                     is_btc_5min = (
-                        'btc-updown-5m' in slug or  # 严格匹配
-                        ('btc' in slug or 'bitcoin' in slug) and '5m' in slug  # 宽松匹配 BTC + 5m
+                        'btc-updown-5m' in slug_lower or  # 严格匹配
+                        ('btc' in slug_lower or 'bitcoin' in slug_lower) and '5m' in slug_lower  # 宽松匹配 BTC + 5m
                     )
                     
                     # 备用：基于问题内容匹配
                     if not is_btc_5min:
                         is_btc_5min = (
-                            ('bitcoin' in question or 'btc' in slug) and
-                            ('5 min' in question or '5m' in slug or '5-minute' in question)
+                            ('bitcoin' in question_lower or 'btc' in slug_lower) and
+                            ('5 min' in question_lower or '5m' in slug_lower or '5-minute' in question_lower)
                         )
                     
                     if is_btc_5min:
@@ -544,11 +546,14 @@ class TradingEngine:
                 
                 print(f"[调试] 获取到 {len(markets)} 个活跃市场，匹配到 {len(btc_5min_markets)} 个5分钟BTC市场")
                 
-                # 调试：打印前5个市场的 slug
+                # 调试：打印前3个市场的详细信息
                 if len(markets) > 0:
-                    print(f"[调试] 前5个市场 slug:")
-                    for i, m in enumerate(markets[:5]):
-                        print(f"    {i+1}. {m.get('slug', '')[:60]}")
+                    print(f"[调试] 前3个市场字段:")
+                    for i, m in enumerate(markets[:3]):
+                        print(f"    {i+1}. 字段列表: {list(m.keys())[:10]}")  # 只显示前10个字段
+                        print(f"       question: {str(m.get('question', ''))[:50]}")
+                        print(f"       slug: {str(m.get('slug', ''))[:60]}")
+                        print(f"       condition_id: {str(m.get('condition_id', ''))[:30]}")
                 
                 # 必须找到5分钟比特币市场
                 if btc_5min_markets:
