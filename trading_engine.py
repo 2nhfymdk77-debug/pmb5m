@@ -116,7 +116,7 @@ class TradingEngine:
 
         # 界面显示器
         self.dashboard = TradingDashboard()
-        self.realtime_display = RealTimeDisplay(refresh_interval=5)  # 5秒刷新一次完整界面
+        self.realtime_display = RealTimeDisplay(refresh_interval=1)  # 5秒刷新一次完整界面
 
         # 交易状态
         self.is_running = False
