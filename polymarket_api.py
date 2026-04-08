@@ -593,7 +593,21 @@ class PolymarketClient:
             book_params = [BookParams(token_id=tid, side="0") for tid in token_ids]
 
             response = self.client.get_midpoints(book_params)
-            return response.get("midpoints", {})
+            midpoints = response.get("midpoints", {})
+            
+            # 转换价格格式：如果是 0-100 格式，转换为 0-1 格式
+            converted = {}
+            for token_id, price in midpoints.items():
+                if price is not None:
+                    # 如果价格大于 1，认为是美分格式（0-100），转换为小数格式（0-1）
+                    if price > 1:
+                        converted[token_id] = price / 100
+                    else:
+                        converted[token_id] = price
+                else:
+                    converted[token_id] = 0.0
+            
+            return converted
         except Exception as e:
             print(f"获取中间价失败: {e}")
             return {}
@@ -755,8 +769,24 @@ class PolymarketClient:
                 }
                 for ask in asks_data
             ] if asks_data else []
+            
+            # 统一转换价格格式（如果是 0-100 格式，转换为 0-1 格式）
+            def convert_price(price):
+                if price > 1:
+                    return price / 100
+                return price
+            
+            bids_converted = [
+                {"price": convert_price(bid["price"]), "size": bid["size"]}
+                for bid in bids
+            ]
+            
+            asks_converted = [
+                {"price": convert_price(ask["price"]), "size": ask["size"]}
+                for ask in asks
+            ]
 
-            return {"bids": bids, "asks": asks}
+            return {"bids": bids_converted, "asks": asks_converted}
 
         except Exception as e:
             print(f"获取订单簿失败: {e}")

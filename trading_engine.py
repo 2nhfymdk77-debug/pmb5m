@@ -253,12 +253,11 @@ class TradingEngine:
                     else:
                         print(f"[启动] [OK] 授权额度: ${allowance:.2f}")
                     
-                    # 如果余额为0，给出警告但不阻止启动
+                    # 即使余额为0，也认为 API 连接正常，继续运行
                     if balance == 0:
                         print("[启动] [!] 警告: 余额为 0，将使用配置中的 initial_balance 进行仓位计算")
                         print("[启动] [!] 请确认钱包中是否有 USDC.e")
-                        return True  # 仍然返回 True，允许启动
-                    
+                    # API 已连接，可以继续
                     return True
                 else:
                     print("[启动] [!] 无法获取余额，API 可能未正确初始化")
@@ -532,6 +531,7 @@ class TradingEngine:
             # 记录更新时间
             self.last_update_time = datetime.now().strftime("%H:%M:%S")
             self.last_update_duration = (time.time() - start_time) * 1000
+            # 市场数据获取成功，API 状态设为 connected
             self.api_status = "connected"
 
             # 单行动态输出
@@ -555,8 +555,9 @@ class TradingEngine:
         """更新余额"""
         try:
             balance = self.client.get_balance()
-            if balance is not None and balance > 0:
+            if balance is not None and balance >= 0:
                 self.balance = balance
+                # 即使余额为 0，也认为 API 连接正常
                 self.api_status = "connected"
             else:
                 self.api_status = "disconnected"
