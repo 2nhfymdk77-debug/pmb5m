@@ -657,35 +657,29 @@ class TradingEngine:
         """计算仓位大小
         
         策略：
-        - 每次用余额的 1/12 开仓
-        - 余额 > 初始×3 → 基础翻倍
-        - 余额 > 初始×9 → 再次翻倍 (在上一阶段基础上)
-        - 余额 > 初始×27 → 再次翻倍
+        - 余额 = 初始余额 × 1 → 开仓 $1
+        - 余额 = 初始余额 × 3 → 开仓 $2 (翻倍)
+        - 余额 = 初始余额 × 9 → 开仓 $4 (再翻倍)
+        - 余额 = 初始余额 × 27 → 开仓 $8 (再翻倍)
         
         示例：初始余额 $12
-        - 余额 $12   → $12/12 × 1 = $1
-        - 余额 $36   → $36/12 × 2 = $6 (上一阶段的2倍)
-        - 余额 $108  → $108/12 × 4 = $36 (上一阶段的2倍)
+        - 余额 $12   → $1
+        - 余额 $36   → $2
+        - 余额 $108  → $4
+        - 余额 $324  → $8
         """
         # 使用从 API 读取的初始余额，而非配置值
         initial_balance = self.initial_balance if self.initial_balance > 0 else self.config.initial_balance
         
-        # 基础开仓 = 余额的 1/12
-        base_position = self.balance / 12.0
-        
-        # 计算翻倍倍数：在上一阶段基础上 ×2
-        # 余额 > 初始×3^n 时，倍数 = 2^n
+        # 计算翻倍倍数
+        # 余额 >= 初始×3^n 时，倍数 = 2^n
         multiplier = 1
-        power = 1
+        power = 0
         while self.balance >= initial_balance * (3 ** power):
             multiplier = 2 ** power
             power += 1
         
-        position_size = base_position * multiplier
-        position_size = math.floor(position_size)
-        
-        # 确保最小开仓金额为 1
-        return max(1.0, position_size)
+        return float(multiplier)
 
     def place_dual_orders(self, position_size: float) -> None:
         """
