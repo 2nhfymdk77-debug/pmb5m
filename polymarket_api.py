@@ -474,11 +474,26 @@ class PolymarketClient:
                 print("[!] .env 中凭证无效，尝试自动创建...")
 
             # 自动检测签名类型
+            # 注意：signature_type=0 (EOA) 需要私钥直接签名
+            # signature_type=2 (GNOSIS_SAFE) 需要多签钱包设置
+            # 如果提供了私钥但使用 GNOSIS_SAFE，签名会失败
+            # 重要：切换签名类型后，API 凭证需要重新创建！
             if signature_type == 2 and private_key:
                 print("[!] 警告: signature_type=2 (GNOSIS_SAFE) 但提供了私钥")
                 print("[*] 自动切换到 signature_type=0 (EOA) 使用私钥签名")
+                print("[!] 重要：请重新创建 API 凭证（切换签名类型后旧凭证无效）")
                 signature_type = 0
                 self.signature_type = 0
+                # 清除旧凭证，强制重新创建
+                self.api_key = None
+                self.api_secret = None
+                self.passphrase = None
+                self.api_credentials = None
+            elif signature_type == 0 and not private_key:
+                print("[!] 警告: signature_type=0 (EOA) 但没有提供私钥")
+                print("[*] 切换到 signature_type=2 (GNOSIS_SAFE) 使用 API 凭证")
+                signature_type = 2
+                self.signature_type = 2
             
             # 添加签名类型（注意：0 是有效值，必须用 is not None 判断）
             if signature_type is not None:
@@ -1447,6 +1462,8 @@ class PolymarketClient:
                 print(f"[!] get_balance: 未知响应类型 {type(resp)}")
         except Exception as e:
             print(f"[!] get_balance: get_balance_allowance 失败: {e}")
+            import traceback
+            traceback.print_exc()
 
         return 0.0
 
