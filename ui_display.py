@@ -441,26 +441,6 @@ class TradingDashboard:
         """打印市场信息"""
         card = Card(f"{Icons.CHART} 市场信息", 80, self.box_style)
 
-        # YES 和 NO 价格
-        yes_price = market_data.get('yes_price', 0)
-        no_price = market_data.get('no_price', 0)
-        best_bid = market_data.get('best_bid', 0)
-        best_ask = market_data.get('best_ask', 0)
-        spread = market_data.get('spread', 0)
-
-        card.add_line(f"YES 价格: {self.formatter.bold(self.formatter.format_price(yes_price))} {self.formatter.color(Icons.TREND_UP if yes_price > 50 else Icons.TREND_DOWN, Colors.GREEN if yes_price > 50 else Colors.RED)}")
-        card.add_line(f"NO  价格: {self.formatter.bold(self.formatter.format_price(no_price))} {self.formatter.color(Icons.TREND_DOWN if no_price > 50 else Icons.TREND_UP, Colors.GREEN if no_price > 50 else Colors.RED)}")
-
-        card.add_spacer()
-
-        # 买卖价差
-        spread_color = Colors.GREEN if spread < 5 else Colors.YELLOW if spread < 10 else Colors.RED
-        card.add_line(f"买一价:   {self.formatter.format_price(best_bid)}")
-        card.add_line(f"卖一价:   {self.formatter.format_price(best_ask)}")
-        card.add_line(f"价差:     {self.formatter.color(f'{spread} 美分', spread_color)}")
-
-        card.add_spacer()
-
         # 数据更新
         card.add_line(f"更新时间: {self.formatter.dim(update_time)}")
         duration_color = Colors.GREEN if update_duration < 500 else Colors.YELLOW if update_duration < 1000 else Colors.RED
