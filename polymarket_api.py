@@ -1056,74 +1056,62 @@ class PolymarketClient:
     def get_balance(self) -> float:
         """获取账户余额"""
         if not self.client:
+            print("[!] get_balance: client 未初始化")
             return 0.0
 
-        # 方法列表（按优先级尝试）
-        methods = [
-            # 方法1: 直接获取余额
-            lambda: self._get_balance_direct(),
-            # 方法2: 获取 allowance
-            lambda: self._get_balance_from_allowance(),
-            # 方法3: 获取 USDC 余额
-            lambda: self._get_usdc_balance(),
-            # 方法4: 获取钱包余额
-            lambda: self._get_wallet_balance(),
-        ]
-
-        for method in methods:
-            try:
-                balance = method()
-                if balance is not None and balance >= 0:
-                    return balance
-            except Exception:
-                continue
+        # 方法1: 使用 get_balance_allowance（SDK 推荐方式）
+        try:
+            print("[*] get_balance: 尝试 get_balance_allowance...")
+            resp = self.client.get_balance_allowance()
+            print(f"[*] get_balance: 响应类型 = {type(resp)}, 内容 = {resp}")
+            
+            if resp is None:
+                print("[!] get_balance: 响应为 None")
+            elif isinstance(resp, dict):
+                balance = float(resp.get("balance", 0) or 0)
+                allowance = float(resp.get("allowance", 0) or 0)
+                print(f"[*] get_balance: balance={balance}, allowance={allowance}")
+                return balance
+            elif isinstance(resp, (float, int)):
+                return float(resp)
+            else:
+                print(f"[!] get_balance: 未知响应类型 {type(resp)}")
+        except Exception as e:
+            print(f"[!] get_balance: get_balance_allowance 失败: {e}")
 
         return 0.0
 
     def _get_balance_direct(self) -> float:
-        """方法1: 直接获取余额"""
+        """方法1: 直接获取余额（保留兼容性）"""
         try:
             resp = self.client.get_balance_allowance()
             if resp and isinstance(resp, (dict, float, int)):
                 if isinstance(resp, dict):
-                    return float(resp.get("balance", 0))
+                    return float(resp.get("balance", 0) or 0)
                 return float(resp)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[!] _get_balance_direct 失败: {e}")
         return None
 
     def _get_balance_from_allowance(self) -> float:
         """方法2: 从 allowance 获取余额"""
-        try:
-            resp = self.client.get_allowances()
-            if resp and isinstance(resp, dict):
-                return float(resp.get("balance", 0))
-        except Exception:
-            pass
+        # SDK 没有单独的方法，保持兼容
         return None
 
     def _get_usdc_balance(self) -> float:
         """方法3: 获取 USDC 余额"""
-        try:
-            resp = self.client.get_usdc_balance()
-            if resp and isinstance(resp, (dict, float, int)):
-                if isinstance(resp, dict):
-                    return float(resp.get("balance", 0))
-                return float(resp)
-        except Exception:
-            pass
+        # SDK 没有这个方法，保持兼容
         return None
 
     def _get_wallet_balance(self) -> float:
         """方法4: 获取钱包余额"""
         try:
-            resp = self.client.get_wallet_balance()
-            if resp and isinstance(resp, (dict, float, int)):
-                if isinstance(resp, dict):
-                    return float(resp.get("balance", 0))
-                return float(resp)
-        except Exception:
-            pass
+            # SDK 可能没有这个方法，尝试使用 get_address 获取钱包地址
+            address = self.client.get_address()
+            print(f"[*] 钱包地址: {address}")
+            # 注意：钱包余额需要通过其他 API 获取，这里返回 None
+        except Exception as e:
+            print(f"[!] _get_wallet_balance 失败: {e}")
         return None
 
     def create_order(
