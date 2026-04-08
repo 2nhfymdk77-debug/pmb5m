@@ -644,6 +644,14 @@ class PolymarketClient:
             if response.status_code == 200:
                 events = response.json()
                 print(f"[*] 获取到 {len(events)} 个活跃事件")
+                
+                # 调试：打印前5个事件的slug
+                print(f"[调试] 前5个事件slug:")
+                for i, event in enumerate(events[:5]):
+                    slug = event.get("slug", "")
+                    title = event.get("title", "")[:40]
+                    print(f"    {i+1}. {slug} - {title}")
+                
                 result = []
                 for event in events:
                     slug = event.get("slug", "").lower()
