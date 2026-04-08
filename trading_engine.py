@@ -515,18 +515,43 @@ class TradingEngine:
         try:
             # 获取最新活跃市场列表（专门获取BTC 5分钟市场）
             try:
-                # 首先尝试获取BTC 5分钟市场
-                markets = self.client.get_btc_5min_markets(limit=10)
-                if not markets:
-                    print("[*] BTC 5分钟市场为空，尝试获取全部活跃市场...")
-                    markets = self.client.get_tradable_markets(limit=100)
-                    # 从全部市场中过滤BTC 5分钟
-                    btc_5min = []
-                    for m in markets:
-                        slug = (m.get('slug', '') or '').lower()
-                        if 'btc-updown-5m' in slug:
-                            btc_5min.append(m)
-                    markets = btc_5min
+                # 首先尝试通过已知slug格式直接获取
+                import time
+                current_ts = int(time.time())
+                # 计算当前5分钟周期的时间戳 (向下取整)
+                period_ts = (current_ts // 300) * 300
+                
+                # 生成当前和下一个5分钟周期的slug
+                current_slug = f"btc-updown-5m-{period_ts}"
+                next_slug = f"btc-updown-5m-{period_ts + 300}"
+                
+                print(f"[*] 尝试直接获取BTC 5分钟市场: {current_slug}")
+                market = self.client.get_market_by_slug(current_slug)
+                if market:
+                    print(f"[OK] 找到市场: {market.get('question', '')[:50]}")
+                    markets = [market]
+                else:
+                    print(f"[*] 尝试下一个周期: {next_slug}")
+                    market = self.client.get_market_by_slug(next_slug)
+                    if market:
+                        print(f"[OK] 找到市场: {market.get('question', '')[:50]}")
+                        markets = [market]
+                    else:
+                        print("[*] 直接获取失败，从列表中搜索...")
+                        markets = self.client.get_btc_5min_markets(limit=10)
+                        if not markets:
+                            markets = self.client.get_tradable_markets(limit=100)
+                            # 从全部市场中过滤BTC 5分钟（更宽松匹配）
+                            btc_5min = []
+                            for m in markets:
+                                slug = (m.get('slug', '') or '').lower()
+                                title = (m.get('event_title', '') or '').lower()
+                                question = (m.get('question', '') or '').lower()
+                                # 匹配各种BTC 5分钟格式
+                                if ('btc' in slug or 'btc' in title or 'bitcoin' in slug or 'bitcoin' in title):
+                                    if ('5m' in slug or '5 min' in title or '5 min' in question or 'updown' in slug):
+                                        btc_5min.append(m)
+                            markets = btc_5min
                 
                 if not markets:
                     raise TradingError("无法获取活跃市场列表")
