@@ -1182,7 +1182,13 @@ class PolymarketClient:
                 if allowance > 10000 and allowance != float("inf"):
                     allowance = allowance / 1000000
                 
-                print(f"[*] get_balance: balance={balance}, allowance={allowance}")
+                # 如果授权额度是天文数字，认为是无限授权
+                if allowance > 1e10:
+                    allowance_display = "无限"
+                else:
+                    allowance_display = f"{allowance}"
+                
+                print(f"[*] get_balance: balance={balance}, allowance={allowance_display}")
                 return balance
             elif isinstance(resp, (float, int)):
                 return float(resp)
