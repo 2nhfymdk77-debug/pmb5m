@@ -670,13 +670,13 @@ class PolymarketClient:
             return []
 
     def get_tradable_markets(self, limit: int = 100) -> List[Dict[str, Any]]:
-        """获取可交易市场（使用Gamma API获取活跃市场）"""
+        """获取可交易市场（使用官方 Events API 获取活跃市场）"""
         if not self.client:
             return []
         try:
             import requests
-            # 使用 /markets 端点获取活跃市场（官方推荐）
-            url = "https://gamma-api.polymarket.com/markets"
+            # 使用官方推荐的 /events 接口获取活跃事件
+            url = "https://gamma-api.polymarket.com/events"
             params = {
                 "active": "true",
                 "closed": "false",
@@ -688,14 +688,16 @@ class PolymarketClient:
             }
             response = requests.get(url, params=params, headers=headers, timeout=10)
             if response.status_code == 200:
-                markets = response.json()
-                print(f"[*] 获取到 {len(markets)} 个活跃市场")
-                # 打印前5个市场的slug用于调试
-                for i, m in enumerate(markets[:5]):
-                    print(f"    [{i+1}] {m.get('slug', 'N/A')[:60]} - {m.get('question', 'N/A')[:40]}")
-                return markets
+                events = response.json()
+                print(f"[*] 获取到 {len(events)} 个活跃事件")
+                # 打印前5个事件用于调试
+                for i, e in enumerate(events[:5]):
+                    print(f"    [{i+1}] slug: {e.get('slug', 'N/A')[:60]}")
+                    print(f"        question: {e.get('question', 'N/A')[:40]}")
+                # 返回事件列表（事件包含关联市场）
+                return events
             else:
-                print(f"获取活跃市场失败: {response.status_code} - {response.text[:200]}")
+                print(f"获取活跃事件失败: {response.status_code} - {response.text[:200]}")
                 return []
         except Exception as e:
             print(f"获取可交易市场失败: {e}")
@@ -727,11 +729,11 @@ class PolymarketClient:
             return None
 
     def get_btc_5min_markets(self, limit: int = 10) -> List[Dict[str, Any]]:
-        """专门获取BTC 5分钟预测市场"""
+        """专门获取BTC 5分钟预测市场（使用官方 Events API）"""
         try:
             import requests
-            # 使用 /markets 端点获取活跃市场
-            url = "https://gamma-api.polymarket.com/markets"
+            # 使用官方推荐的 /events 接口获取活跃事件
+            url = "https://gamma-api.polymarket.com/events"
             params = {
                 "active": "true",
                 "closed": "false",
@@ -741,30 +743,30 @@ class PolymarketClient:
             response = requests.get(url, params=params, headers=headers, timeout=10)
             
             if response.status_code == 200:
-                markets = response.json()
-                print(f"[*] 获取到 {len(markets)} 个活跃市场")
+                events = response.json()
+                print(f"[*] 获取到 {len(events)} 个活跃事件")
                 
-                # 调试：打印前10个市场的slug
-                print(f"[调试] 前10个市场slug:")
-                for i, market in enumerate(markets[:10]):
-                    slug = market.get("slug", "")
-                    question = market.get("question", "")[:40]
+                # 打印前10个事件的slug用于调试
+                print(f"[调试] 前10个事件:")
+                for i, event in enumerate(events[:10]):
+                    slug = event.get("slug", "")
+                    question = event.get("question", "")[:40]
                     print(f"    {i+1}. {slug} - {question}")
                 
-                # 查找BTC 5分钟市场
+                # 查找BTC 5分钟事件
                 result = []
-                for market in markets:
-                    slug = market.get("slug", "").lower()
+                for event in events:
+                    slug = event.get("slug", "").lower()
                     # 匹配 btc-updown-5m-xxx 格式
-                    if "btc-updown-5m" in slug:
-                        result.append(market)
+                    if "btc-updown-5m" in slug or ("btc" in slug and "5m" in slug):
+                        result.append(event)
                         if len(result) >= limit:
                             break
                 
-                print(f"[*] 匹配到 {len(result)} 个BTC 5分钟市场")
+                print(f"[*] 匹配到 {len(result)} 个BTC 5分钟事件")
                 return result
             else:
-                print(f"获取BTC市场失败: {response.status_code} - {response.text[:200]}")
+                print(f"获取BTC事件失败: {response.status_code} - {response.text[:200]}")
                 return []
         except Exception as e:
             print(f"获取BTC市场失败: {e}")
