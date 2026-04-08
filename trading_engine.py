@@ -425,10 +425,18 @@ class TradingEngine:
                         return
 
                 # 8. 挂双向限价单（75）
+                print("[调试] 准备挂单...", flush=True)
+                sys.stdout.flush()
                 self.place_dual_orders(position_size)
+                print("[调试] 挂单完成", flush=True)
+                sys.stdout.flush()
 
                 # 9. 等待成交或周期结束（最多等待到周期结束）
+                print("[调试] 开始等待成交...", flush=True)
+                sys.stdout.flush()
                 has_execution = self.wait_for_execution(position_size, max_wait=30)
+                print(f"[调试] 等待完成，has_execution={has_execution}", flush=True)
+                sys.stdout.flush()
                 
                 # 如果没有订单成交，提前结束此周期
                 if not has_execution and not self.current_position:
