@@ -10,7 +10,7 @@ Polymarket API客户端
 from typing import Optional, Dict, List, Any, Tuple
 from py_clob_client.client import ClobClient
 from py_clob_client.constants import POLYGON
-from py_clob_client.clob_types import ApiCreds, OrderArgs, OrderType
+from py_clob_client.clob_types import ApiCreds, OrderArgs, MarketOrderArgs, OrderType
 from py_clob_client.order_builder.constants import BUY, SELL
 from pathlib import Path
 import time
@@ -1285,37 +1285,37 @@ class PolymarketClient:
 
             # 根据订单类型选择不同的方法
             if order_type in ["FOK", "FAK"]:
-                # 市价单：使用 amount（美元金额）而非 size（股数）
-                order_args["amount"] = size * api_price  # 市价单的金额
-                order_args["price"] = api_price  # 最差价格限制
-                response = self.client.create_and_post_market_order(
+                # 市价单：使用 MarketOrderArgs 和 create_market_order
+                # MarketOrderArgs 签名: (token_id, amount, side, price=0, fee_rate_bps=0, nonce=0, taker='0x...', order_type='FOK')
+                market_args = MarketOrderArgs(
                     token_id=token_id,
+                    amount=size * api_price,  # 市价单的金额（美元）
                     side=side.upper(),
-                    amount=size * api_price,
-                    price=api_price,
-                    options=options,
+                    price=api_price,  # 最差价格限制
                     order_type=OrderType.FOK if order_type == "FOK" else OrderType.FAK,
+                )
+                response = self.client.create_market_order(
+                    market_args,
+                    options=options,
                 )
             else:
                 # 限价单：使用官方推荐的 OrderArgs（直接作为位置参数）
-                order_type_enum = OrderType.GTC
-                if order_type == "GTD":
-                    order_type_enum = OrderType.GTD
-                    
-                # 构建 OrderArgs 对象
+                # OrderArgs 签名: (token_id, price, size, side, fee_rate_bps=0, nonce=0, expiration=0, taker='0x...')
                 args = OrderArgs(
                     token_id=token_id,
-                    side=side.upper(),
-                    size=size,
-                    order_type=order_type_enum,
                     price=api_price,
-                    tick_size=options.get("tick_size", "0.01"),
-                    neg_risk=options.get("neg_risk", False),
+                    size=size,
+                    side=side.upper(),
                 )
                 
+                # tick_size 和 neg_risk 通过 options 传递
+                order_options = {
+                    "tick_size": options.get("tick_size", "0.01"),
+                    "neg_risk": options.get("neg_risk", False),
+                }
                 response = self.client.create_and_post_order(
                     args,
-                    options=options,
+                    options=order_options,
                 )
 
             # 解析响应
