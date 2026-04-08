@@ -513,51 +513,30 @@ class TradingEngine:
             f.write(f"\n=== fetch_real_market_data ===\n")
 
         try:
-            # 获取最新活跃市场列表（优先从加密市场获取）
+            # 获取最新活跃市场列表（专门获取BTC 5分钟市场）
             try:
-                # 首先尝试获取加密市场
-                markets = self.client.get_crypto_markets(limit=50)
+                # 首先尝试获取BTC 5分钟市场
+                markets = self.client.get_btc_5min_markets(limit=10)
                 if not markets:
-                    print("[*] 加密市场为空，尝试获取全部活跃市场...")
+                    print("[*] BTC 5分钟市场为空，尝试获取全部活跃市场...")
                     markets = self.client.get_tradable_markets(limit=100)
+                    # 从全部市场中过滤BTC 5分钟
+                    btc_5min = []
+                    for m in markets:
+                        slug = (m.get('slug', '') or '').lower()
+                        if 'btc-updown-5m' in slug:
+                            btc_5min.append(m)
+                    markets = btc_5min
                 
                 if not markets:
                     raise TradingError("无法获取活跃市场列表")
                 
-                # 只用于5分钟比特币预测市场 - 匹配 slug 格式
-                btc_5min_markets = []
-                for m in markets:
-                    slug = m.get('slug', '') or ''
-                    question = m.get('question', '') or ''
-                    slug_lower = slug.lower()
-                    question_lower = question.lower()
-                    
-                    # 匹配 btc-updown-5m 或包含 btc 和 5m 的 slug
-                    # URL格式: btc-updown-5m-1775671800
-                    is_btc_5min = (
-                        'btc-updown-5m' in slug_lower or  # 严格匹配
-                        ('btc' in slug_lower or 'bitcoin' in slug_lower) and '5m' in slug_lower  # 宽松匹配 BTC + 5m
-                    )
-                    
-                    # 备用：基于问题内容匹配
-                    if not is_btc_5min:
-                        is_btc_5min = (
-                            ('bitcoin' in question_lower or 'btc' in slug_lower) and
-                            ('5 min' in question_lower or '5m' in slug_lower or '5-minute' in question_lower)
-                        )
-                    
-                    if is_btc_5min:
-                        btc_5min_markets.append(m)
-                
-                print(f"[调试] 获取到 {len(markets)} 个活跃市场，匹配到 {len(btc_5min_markets)} 个5分钟BTC市场")
-                
-                # 调试：打印前3个市场的详细信息
+                # 调试：打印前3个市场
                 if len(markets) > 0:
                     print(f"[调试] 前3个市场:")
                     for i, m in enumerate(markets[:3]):
-                        print(f"    {i+1}. question: {str(m.get('question', ''))[:50]}")
-                        print(f"       slug: {str(m.get('slug', ''))[:60]}")
-                        print(f"       condition_id: {str(m.get('condition_id', ''))[:30]}")
+                        print(f"    {i+1}. slug: {m.get('slug', '')[:60]}")
+                        print(f"       question: {str(m.get('question', ''))[:50]}")
                 
                 # 必须找到5分钟比特币市场
                 if btc_5min_markets:
