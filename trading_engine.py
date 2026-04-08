@@ -322,23 +322,27 @@ class TradingEngine:
         
         while True:
             try:
-                user_input = input("请输入 (y/n/q): ").strip().lower()
+                print("请输入 (y/n/q): ", end="", flush=True)
+                user_input = sys.stdin.readline().strip().lower()
+                if not user_input:
+                    print("  无效输入，请输入 y、n 或 q")
+                    continue
                 if user_input == 'y':
                     self.first_order_confirmed = True
                     print("\n[OK] 已确认，开始下单！\n")
                     return False  # 继续挂单
                 elif user_input == 'n':
                     self.first_order_confirmed = True
-                    print("\n⏭️  已取消本次交易，跳过此事件...\n")
+                    print("\n[跳过] 已取消本次交易，跳过此事件...\n")
                     return True  # 跳过挂单
                 elif user_input == 'q':
-                    print("\n👋 退出程序...")
+                    print("\n[退出] 退出程序...")
                     self.stop()
                     sys.exit(0)
                 else:
                     print("  无效输入，请输入 y、n 或 q")
             except (KeyboardInterrupt, EOFError):
-                print("\n👋 退出程序...")
+                print("\n[退出] 退出程序...")
                 self.stop()
                 sys.exit(0)
 
