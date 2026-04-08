@@ -302,16 +302,27 @@ class TradingEngine:
         stop_loss_display = self.config.stop_loss / 100.0 if self.config.stop_loss > 1 else self.config.stop_loss
         take_profit_display = self.config.take_profit / 100.0 if self.config.take_profit > 1 else self.config.take_profit
         
+        # 显示市场详情
+        market_question = self.client.get_market_question(self.yes_token_id) if self.yes_token_id else "Unknown"
+        market_slug = self.client.get_market_slug(self.yes_token_id) if self.yes_token_id else "Unknown"
+        condition_id = self.client.get_condition_id(self.yes_token_id) if self.yes_token_id else "Unknown"
+        
         print("\n" + "=" * 60)
         print("[!]  首次下单确认  [!]")
         print("=" * 60)
+        print(f"  市场问题:     {market_question[:50]}..." if len(market_question) > 50 else f"  市场问题:     {market_question}")
+        print(f"  市场Slug:     {market_slug}")
+        print(f"  Condition ID: {condition_id}")
+        print(f"  YES Token:    {self.yes_token_id[:20]}..." if self.yes_token_id else "  YES Token:    N/A")
+        print(f"  NO Token:     {self.no_token_id[:20]}..." if self.no_token_id else "  NO Token:     N/A")
+        print("-" * 60)
         print(f"  当前余额:     ${self.balance:.2f}")
         print(f"  开仓金额:     ${position_size:.2f}")
         print(f"  开仓价格:     ${entry_display:.2f}")
         print(f"  止损价格:     ${stop_loss_display:.2f}")
         print(f"  止盈价格:     ${take_profit_display:.2f}")
-        print(f"  YES 价格:     ${market_data.get('yes_price', 0):.2f}")
-        print(f"  NO 价格:      ${market_data.get('no_price', 0):.2f}")
+        print(f"  YES 当前价:   ${market_data.get('yes_price', 0):.2f}")
+        print(f"  NO 当前价:    ${market_data.get('no_price', 0):.2f}")
         print("=" * 60)
         print()
         print("  即将执行真实交易，请确认:")

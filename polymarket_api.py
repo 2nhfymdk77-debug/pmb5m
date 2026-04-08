@@ -575,6 +575,57 @@ class PolymarketClient:
             "neg_risk": self.get_neg_risk(token_id)
         }
 
+    def get_market_question(self, token_id: str) -> str:
+        """获取市场的question字段"""
+        try:
+            market = self.get_market_by_token_id(token_id)
+            if market:
+                return market.get("question", "Unknown")
+            return "Unknown"
+        except Exception as e:
+            print(f"获取 market question 失败: {e}")
+            return "Unknown"
+    
+    def get_market_slug(self, token_id: str) -> str:
+        """获取市场的slug字段"""
+        try:
+            market = self.get_market_by_token_id(token_id)
+            if market:
+                return market.get("slug", "Unknown")
+            return "Unknown"
+        except Exception as e:
+            print(f"获取 market slug 失败: {e}")
+            return "Unknown"
+    
+    def get_condition_id(self, token_id: str) -> str:
+        """获取市场的condition_id字段"""
+        try:
+            market = self.get_market_by_token_id(token_id)
+            if market:
+                return market.get("condition_id", "Unknown")
+            return "Unknown"
+        except Exception as e:
+            print(f"获取 condition_id 失败: {e}")
+            return "Unknown"
+    
+    def get_market_by_token_id(self, token_id: str) -> Optional[Dict[str, Any]]:
+        """根据token_id获取市场详情（使用缓存）"""
+        if not token_id:
+            return None
+        
+        # 尝试从缓存获取
+        if token_id in self._market_details_cache:
+            return self._market_details_cache[token_id]
+        
+        # 从市场列表获取
+        for market in self._cached_markets:
+            if market.get("condition_info", {}).get("union_id") == token_id or \
+               market.get("clobTokenIds", []) and market["clobTokenIds"][0] == token_id:
+                self._market_details_cache[token_id] = market
+                return market
+        
+        return None
+
     def get_markets(
         self, limit: int = 100, offset: int = 0
     ) -> List[Dict[str, Any]]:
@@ -1045,6 +1096,48 @@ class PolymarketClient:
             import traceback
             traceback.print_exc()
             return None
+
+    def clear_api_credentials(self) -> bool:
+        """清除 API 凭证（强制重新创建）"""
+        try:
+            env_path = Path.cwd() / ".env"
+            
+            if not env_path.exists():
+                print("[!] .env 文件不存在")
+                return False
+            
+            # 读取现有 .env 内容
+            with open(env_path, 'r', encoding='utf-8') as f:
+                existing_lines = f.readlines()
+            
+            # 清除凭证行（设为空值）
+            lines_to_write = []
+            for line in existing_lines:
+                if line.startswith("API_KEY="):
+                    lines_to_write.append("API_KEY=\n")
+                elif line.startswith("API_SECRET="):
+                    lines_to_write.append("API_SECRET=\n")
+                elif line.startswith("PASSPHRASE="):
+                    lines_to_write.append("PASSPHRASE=\n")
+                else:
+                    lines_to_write.append(line)
+            
+            # 写回文件
+            with open(env_path, 'w', encoding='utf-8') as f:
+                f.writelines(lines_to_write)
+            
+            # 清除内存中的凭证
+            self.api_key = None
+            self.api_secret = None
+            self.passphrase = None
+            self.api_credentials = None
+            
+            print("[OK] API 凭证已清除")
+            return True
+            
+        except Exception as e:
+            print(f"[X] 清除凭证失败: {e}")
+            return False
 
     def _save_credentials_to_env(self, credentials: Dict[str, str]) -> bool:
         """保存 API 凭证到 .env 文件"""

@@ -104,7 +104,7 @@ def modify_parameters(config: TradingConfig) -> None:
         print(f"\n[X] 输入错误: {e}")
 
 
-def configure_api(config: TradingConfig) -> None:
+def configure_api(config: TradingConfig, client: PolymarketClient = None) -> None:
     """配置API凭证"""
     print("\n" + "=" * 60)
     print("配置API凭证:")
@@ -114,10 +114,21 @@ def configure_api(config: TradingConfig) -> None:
     print("  API 凭证（Key/Secret/Passphrase）用于 L2 身份验证\n")
 
     try:
+        # 清除凭证选项
+        if client:
+            print("  [r/R] 清除旧凭证并重新创建")
+            print()
+        
         # L1 身份验证 - 私钥
-        private_key = input(f"  Private Key (钱包私钥): ")
-        if private_key:
-            config.private_key = private_key
+        private_key_input = input(f"  Private Key (钱包私钥): ")
+        if private_key_input.lower() == 'r':
+            # 清除旧凭证并重新创建
+            if client and client.clear_api_credentials():
+                print("\n  [OK] 已清除旧凭证，请在下方输入新的私钥")
+            private_key_input = input(f"  Private Key (钱包私钥): ")
+        
+        if private_key_input:
+            config.private_key = private_key_input
 
         # L2 身份验证 - API 凭证
         print("\n  L2 身份验证（API 凭证）:")
@@ -204,8 +215,17 @@ def run_interactive_mode(config: TradingConfig) -> None:
             modify_parameters(config)
 
         elif choice == "3":
-            # 配置API
-            configure_api(config)
+            # 配置API - 动态创建 client 以支持清除凭证
+            from polymarket_api import PolymarketClient
+            temp_client = PolymarketClient(
+                private_key=config.private_key,
+                api_key=config.api_key,
+                api_secret=config.api_secret,
+                passphrase=config.passphrase,
+                signature_type=config.signature_type,
+                funder_address=config.funder_address,
+            )
+            configure_api(config, temp_client)
 
         elif choice == "4":
             # 查看历史（需要先创建引擎）
