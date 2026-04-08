@@ -10,7 +10,7 @@ Polymarket API客户端
 from typing import Optional, Dict, List, Any, Tuple
 from py_clob_client.client import ClobClient
 from py_clob_client.constants import POLYGON
-from py_clob_client.clob_types import ApiCreds, OrderArgs, OrderType
+from py_clob_client.clob_types import ApiCreds, OrderArgs, OrderType, PartialCreateOrderOptions
 from py_clob_client.order_builder.constants import BUY, SELL
 from pathlib import Path
 import time
@@ -1269,7 +1269,8 @@ class PolymarketClient:
                 api_price = price
 
             # 获取市场的 tick_size 和 neg_risk
-            options = self.get_market_options(token_id)
+            tick_size = self.get_tick_size(token_id)
+            neg_risk = self.get_neg_risk(token_id)
             
             # 限价单：使用官方推荐的 OrderArgs（直接作为位置参数）
             # OrderArgs 签名: (token_id, price, size, side, fee_rate_bps=0, nonce=0, expiration=0, taker='0x...')
@@ -1283,11 +1284,11 @@ class PolymarketClient:
                 expiration=expiration_time,
             )
             
-            # tick_size 和 neg_risk 通过 options 传递
-            order_options = {
-                "tick_size": options.get("tick_size", "0.01"),
-                "neg_risk": options.get("neg_risk", False),
-            }
+            # 使用 PartialCreateOrderOptions 对象传递 tick_size 和 neg_risk
+            order_options = PartialCreateOrderOptions(
+                tick_size=tick_size,
+                neg_risk=neg_risk,
+            )
             response = self.client.create_and_post_order(
                 args,
                 options=order_options,
