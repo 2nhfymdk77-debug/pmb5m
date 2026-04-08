@@ -515,12 +515,26 @@ class TradingEngine:
         try:
             # 获取最新活跃市场列表
             try:
-                markets = self.client.get_tradable_markets(limit=10)
+                markets = self.client.get_tradable_markets(limit=50)
                 if not markets:
                     raise TradingError("无法获取活跃市场列表")
                 
-                # 检查当前市场是否仍然是活跃列表中的第一个
-                current_market = markets[0]
+                # 过滤比特币相关市场（包含 "BTC" 或 "bitcoin" 或 "5 min" 或 "5min"）
+                bitcoin_keywords = ["btc", "bitcoin", "5 min", "5min", "5-min"]
+                bitcoin_markets = [
+                    m for m in markets 
+                    if any(kw in m.get('question', '').lower() or kw in m.get('slug', '').lower() 
+                            for kw in bitcoin_keywords)
+                ]
+                
+                # 优先使用比特币市场，否则使用第一个市场
+                if bitcoin_markets:
+                    current_market = bitcoin_markets[0]
+                    print(f"[调试] 找到 {len(bitcoin_markets)} 个比特币市场，使用第一个")
+                else:
+                    current_market = markets[0]
+                    print(f"[警告] 未找到比特币市场，使用第一个活跃市场: {current_market.get('question', 'Unknown')[:50]}")
+                
                 current_market_id = current_market.get("condition_id", "")
                 
                 # 检查市场是否变化或不再活跃
