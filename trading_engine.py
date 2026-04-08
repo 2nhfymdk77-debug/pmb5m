@@ -579,19 +579,14 @@ class TradingEngine:
                     print("[错误] 无法获取市场列表")
                     return None
                 
-                print(f"[诊断] 获取到 {len(markets)} 个市场")
-                
-                # 打印所有 slug 用于调试
-                print("[调试] 前20个市场 slug:")
-                for i, m in enumerate(markets[:20]):
-                    print(f"    [{i+1}] {m.get('slug', '')}")
+                print(f"[*] 搜索 btc-updown-5m 市场...")
                 
                 # 搜索 btc-updown-5m
                 for m in markets:
                     slug = (m.get('slug', '') or '').lower()
                     if 'btc-updown-5m' in slug:
                         market = m
-                        print(f"[诊断] 找到 BTC 市场: {slug}")
+                        print(f"[*] 找到 BTC 市场: {slug}")
                         break
             
             if not market:
@@ -599,17 +594,25 @@ class TradingEngine:
                 return None
             
             # 步骤3: 提取市场信息
+            # 检查所有可能的 ID 字段
             current_market_id = market.get("condition_id", "")
+            if not current_market_id:
+                current_market_id = market.get("id", "")
+            if not current_market_id:
+                current_market_id = market.get("conditionId", "")
+            
             current_slug = market.get("slug", "")
             current_question = market.get("question", "")
             
             print(f"[诊断] 步骤3: 选择市场")
+            print(f"  market keys: {list(market.keys())}")
             print(f"  condition_id: {current_market_id[:30] if current_market_id else 'None'}...")
             print(f"  slug: {current_slug}")
             print(f"  question: {current_question[:50] if current_question else 'None'}")
             
             if not current_market_id:
                 print("[错误] 市场 condition_id 为空")
+                print(f"[诊断] 完整 market: {market}")
                 return None
             
             # 步骤4: 设置 market_id（关键步骤）
