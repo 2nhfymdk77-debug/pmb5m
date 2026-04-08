@@ -1,0 +1,1420 @@
+"""
+Polymarket API客户端
+使用官方 py-clob-client
+基于 Polymarket 官方文档优化：
+- 使用官方推荐的 OrderArgs 和 OrderType
+- 添加 get_tick_size 和 get_neg_risk
+- 添加心跳机制
+- 优化下单流程
+"""
+from typing import Optional, Dict, List, Any, Tuple
+from py_clob_client.client import ClobClient
+from py_clob_client.constants import POLYGON
+from py_clob_client.clob_types import ApiCreds, OrderArgs, OrderType
+from py_clob_client.order_builder.constants import BUY, SELL
+from pathlib import Path
+import time
+import requests
+import threading
+import functools
+from typing import Callable, Any, Optional
+
+
+# === Utility Functions ===
+
+def format_time_remaining(seconds: float) -> str:
+    """格式化剩余时间为 MM:SS 格式
+    
+    Args:
+        seconds: 剩余秒数
+        
+    Returns:
+        格式化的字符串，如 "04:30" 或 "--:--"（如果为负数）
+    """
+    if seconds <= 0:
+        return "--:--"
+    minutes = int(seconds // 60)
+    secs = int(seconds % 60)
+    return f"{minutes:02d}:{secs:02d}"
+
+
+def format_price(price: float, to_cents: bool = True) -> str:
+    """格式化价格
+    
+    Args:
+        price: 价格（0-1 或 0-100）
+        to_cents: 是否转换为美分格式（0.75 -> 75）
+        
+    Returns:
+        格式化后的价格字符串
+    """
+    if to_cents and 0 <= price <= 1:
+        price = price * 100
+    return f"{price:.2f}"
+
+
+def retry_with_backoff(
+    max_retries: int = 3,
+    initial_delay: float = 1.0,
+    max_delay: float = 30.0,
+    backoff_factor: float = 2.0,
+    exceptions: tuple = (requests.RequestException, ConnectionError, TimeoutError)
+):
+    """
+    带指数退避的重试装饰器
+    
+    用于处理临时性错误，如网络超时、连接失败、429 Rate Limit 等
+    
+    Args:
+        max_retries: 最大重试次数
+        initial_delay: 初始延迟（秒）
+        max_delay: 最大延迟（秒）
+        backoff_factor: 退避因子
+        exceptions: 需要重试的异常类型
+    """
+    def decorator(func: Callable) -> Callable:
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs) -> Any:
+            delay = initial_delay
+            last_exception = None
+            
+            for attempt in range(max_retries + 1):
+                try:
+                    return func(*args, **kwargs)
+                except exceptions as e:
+                    last_exception = e
+                    
+                    # 检查是否是永久性错误，不需要重试
+                    error_msg = str(e).lower()
+                    if any(x in error_msg for x in ['401', '403', 'auth', 'unauthorized', 'invalid']):
+                        # 认证错误不重试
+                        raise
+                    
+                    if attempt < max_retries:
+                        # 429 Rate Limit 特殊处理，等待稍长时间
+                        if '429' in str(e) or 'rate' in error_msg:
+                            delay = min(delay * 3, max_delay)  # Rate limit 时延长
+                        
+                        time.sleep(delay)
+                        delay = min(delay * backoff_factor, max_delay)
+                    else:
+                        # 最后一次尝试失败
+                        pass
+            
+            # 所有重试都失败
+            if last_exception:
+                raise last_exception
+            return None
+                
+        return wrapper
+    return decorator
+
+
+class HeartbeatManager:
+    """心跳管理器 - 保持会话活跃
+    
+    根据 Polymarket 文档：
+    - 如果在 10 秒内（带 5 秒缓冲）未收到有效心跳，所有未完成订单将被取消
+    - 需要在每个请求中包含最新的 heartbeat_id
+    """
+    
+    def __init__(self, client: ClobClient):
+        self.client = client
+        self.heartbeat_id = ""
+        self._running = False
+        self._thread = None
+        self._interval = 5  # 每 5 秒发送一次心跳
+    
+    def start(self) -> None:
+        """启动心跳"""
+        if self._running:
+            return
+        self._running = True
+        self._thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
+        self._thread.start()
+        print("[OK] 心跳管理器已启动（每 5 秒发送一次）")
+    
+    def stop(self) -> None:
+        """停止心跳"""
+        self._running = False
+        if self._thread:
+            self._thread.join(timeout=2)
+        print("[OK] 心跳管理器已停止")
+    
+    def _heartbeat_loop(self) -> None:
+        """心跳循环"""
+        consecutive_failures = 0
+        max_failures = 3  # 连续失败3次后减少日志频率
+        
+        while self._running:
+            try:
+                resp = self.client.post_heartbeat(self.heartbeat_id)
+                if resp and "heartbeat_id" in resp:
+                    self.heartbeat_id = resp["heartbeat_id"]
+                    consecutive_failures = 0  # 重置失败计数
+                time.sleep(self._interval)
+            except Exception as e:
+                consecutive_failures += 1
+                # 只有前3次失败才打印详细错误，之后静默
+                if consecutive_failures <= max_failures:
+                    error_msg = str(e)
+                    if "401" in error_msg or "Unauthorized" in error_msg:
+                        print(f"[!] 心跳认证失败，请检查 API 凭证")
+                    else:
+                        print(f"[X] 心跳发送失败: {e}")
+                time.sleep(self._interval)  # 即使失败也继续尝试
+
+
+class RateLimiter:
+    """API 速率限制器（线程安全，支持突发）
+
+    官方速率限制：
+    - 一般限制：15,000 req / 10s
+    - POST /order：峰值 500/s，持续 60/s
+    - DELETE /order：峰值 300/s，持续 50/s
+    """
+
+    def __init__(self):
+        self.requests = {}  # {endpoint: [timestamps]}
+        self.lock = threading.Lock()  # 线程安全
+        self._suppress_logs = False  # 静默模式
+
+    def suppress_logs(self, suppress: bool = True) -> None:
+        """设置是否静默模式（减少日志输出）"""
+        self._suppress_logs = suppress
+
+    def wait_if_needed(self, endpoint: str, limit: int, window: int = 10) -> None:
+        """
+        如果需要，等待以遵守速率限制
+
+        Args:
+            endpoint: API 端点
+            limit: 时间窗口内的最大请求数
+            window: 时间窗口（秒）
+        """
+        with self.lock:
+            now = time.time()
+
+            if endpoint not in self.requests:
+                self.requests[endpoint] = []
+
+            # 清理过期的请求
+            cutoff = now - window
+            self.requests[endpoint] = [
+                ts for ts in self.requests[endpoint] if ts > cutoff
+            ]
+
+            # 检查是否需要等待
+            if len(self.requests[endpoint]) >= limit:
+                oldest = min(self.requests[endpoint])
+                wait_time = (oldest + window) - now + 0.05  # 额外 50ms 缓冲
+                if wait_time > 0:
+                    if not self._suppress_logs:
+                        print(f"[限速] 等待 {wait_time:.2f}s")
+                    time.sleep(wait_time)
+                    # 清理过期的请求
+                    now = time.time()
+                    cutoff = now - window
+                    self.requests[endpoint] = [
+                        ts for ts in self.requests[endpoint] if ts > cutoff
+                    ]
+
+            # 记录这次请求
+            self.requests[endpoint].append(now)
+
+
+class TTLCache:
+    """TTL 缓存 - 带过期时间的内存缓存
+    
+    用于缓存市场数据、价格等会变化但不需要实时更新的数据
+    """
+    
+    def __init__(self, default_ttl: int = 60):
+        """
+        Args:
+            default_ttl: 默认过期时间（秒）
+        """
+        self._cache = {}  # {key: (value, expires_at)}
+        self._lock = threading.Lock()
+        self.default_ttl = default_ttl
+    
+    def get(self, key: str) -> Optional[Any]:
+        """获取缓存值"""
+        with self._lock:
+            if key in self._cache:
+                value, expires_at = self._cache[key]
+                if time.time() < expires_at:
+                    return value
+                else:
+                    # 过期，删除
+                    del self._cache[key]
+            return None
+    
+    def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
+        """设置缓存值"""
+        with self._lock:
+            expires_at = time.time() + (ttl if ttl is not None else self.default_ttl)
+            self._cache[key] = (value, expires_at)
+    
+    def delete(self, key: str) -> None:
+        """删除缓存"""
+        with self._lock:
+            if key in self._cache:
+                del self._cache[key]
+    
+    def clear(self) -> None:
+        """清空所有缓存"""
+        with self._lock:
+            self._cache.clear()
+    
+    def cleanup(self) -> int:
+        """清理过期缓存，返回清理数量"""
+        with self._lock:
+            now = time.time()
+            expired = [k for k, (_, exp) in self._cache.items() if now >= exp]
+            for k in expired:
+                del self._cache[k]
+            return len(expired)
+
+
+class PolymarketClient:
+    """Polymarket API客户端（基于官方py-clob-client）
+
+    身份验证说明：
+    - 公开 API（市场、价格、订单簿）: 无需身份验证
+    - 私有 API（交易、余额）: 需要 L1（私钥）+ L2（API 凭证）
+
+    性能优化：
+    - TTL缓存：市场详情 5分钟，价格 1秒
+    - 速率限制：自动遵守 API 速率限制
+    - 重试机制：指数退避处理临时错误
+    - 线程安全：支持多线程调用
+    """
+
+    # Gamma API 基础 URL
+    GAMMA_API_BASE = "https://gamma-api.polymarket.com"
+
+    # 速率限制配置（官方文档）
+    RATE_LIMITS = {
+        "get_markets": (300, 10),      # Gamma API
+        "get_midpoints": (1500, 10),   # CLOB API
+        "get_orderbook": (1500, 10),   # CLOB API
+        "create_order": (500, 1),      # 峰值 500/s，持续 60/s
+        "cancel_order": (300, 10),      # 峰值 300/s，持续 50/s
+    }
+
+    # 缓存 TTL 配置（秒）
+    CACHE_TTL = {
+        "market_details": 300,   # 市场详情 5分钟
+        "token_ids": 300,        # 代币ID 5分钟
+        "prices": 1,             # 价格 1秒（实时更新）
+        "orderbook": 1,           # 订单簿 1秒
+    }
+
+    def __init__(
+        self,
+        private_key: str = "",
+        api_key: str = "",
+        api_secret: str = "",
+        passphrase: str = "",
+        chain_id: int = POLYGON,
+        signature_type: int = 2,  # GNOSIS_SAFE (最常见)
+        funder_address: str = "",
+    ):
+        """
+        初始化API客户端
+
+        Args:
+            private_key: 钱包私钥（L1 身份验证）
+            api_key: API 密钥（L2 身份验证）
+            api_secret: API 密钥（L2 身份验证）
+            passphrase: API 口令（L2 身份验证）
+            chain_id: 链ID（默认为Polygon 137）
+            signature_type: 签名类型
+                - 0: EOA（标准以太坊钱包）
+                - 1: POLY_PROXY（Magic Link 代理钱包）
+                - 2: GNOSIS_SAFE（多签代理钱包，最常见）
+            funder_address: 资金地址（代理钱包地址）
+        """
+        self.private_key = private_key
+        self.api_key = api_key
+        self.api_secret = api_secret
+        self.passphrase = passphrase
+        self.chain_id = chain_id
+        self.signature_type = signature_type
+        self.funder_address = funder_address
+
+        # TTL 缓存（带过期时间）
+        self.token_ids_cache = TTLCache(default_ttl=self.CACHE_TTL["token_ids"])
+        self.market_details_cache = TTLCache(default_ttl=self.CACHE_TTL["market_details"])
+        self.prices_cache = TTLCache(default_ttl=self.CACHE_TTL["prices"])
+        self.orderbook_cache = TTLCache(default_ttl=self.CACHE_TTL["orderbook"])
+
+        # 速率限制器（静默模式减少日志）
+        self.rate_limiter = RateLimiter()
+        self.rate_limiter.suppress_logs(True)
+        
+        # 心跳管理器
+        self.heartbeat_manager: Optional[HeartbeatManager] = None
+        
+        # API 调用统计
+        self._api_stats = {
+            "calls": 0,
+            "errors": 0,
+            "cache_hits": 0,
+            "last_reset": time.time()
+        }
+        self._stats_lock = threading.Lock()
+
+        # 初始化官方客户端
+        self.client: Optional[ClobClient] = None
+        self.api_credentials: Optional[Dict[str, str]] = None
+
+        try:
+            # 公开 API 初始化（无需私钥）
+            if not private_key:
+                self.client = ClobClient(
+                    host="https://clob.polymarket.com",
+                    chain_id=chain_id,
+                )
+                print("[ 客户端初始化成功（公开 API 模式）")
+                return
+
+            # 私有 API 初始化（需要私钥和凭证）
+            client_args = {
+                "host": "https://clob.polymarket.com",
+                "chain_id": chain_id,
+                "key": private_key,
+            }
+
+            # 准备 API 凭证（L2 身份验证）
+            if api_key and api_secret and passphrase:
+                # 使用 ApiCreds 对象格式
+                self.api_credentials = ApiCreds(
+                    api_key=api_key,
+                    api_secret=api_secret,
+                    api_passphrase=passphrase
+                )
+                client_args["creds"] = self.api_credentials
+            elif self.api_credentials and isinstance(self.api_credentials, dict):
+                # 使用字典格式（从环境变量加载）
+                self.api_credentials = ApiCreds(
+                    api_key=self.api_credentials.get("key", self.api_credentials.get("apiKey", "")),
+                    api_secret=self.api_credentials.get("secret", self.api_credentials.get("api_secret", "")),
+                    api_passphrase=self.api_credentials.get("passphrase", self.api_credentials.get("api_passphrase", ""))
+                )
+                client_args["creds"] = self.api_credentials
+
+            # 添加签名类型
+            if signature_type:
+                client_args["signature_type"] = signature_type
+
+            # 添加 funder 地址
+            if funder_address:
+                client_args["funder"] = funder_address
+
+            self.client = ClobClient(**client_args)
+            print(f"[OK] 客户端初始化成功（私有 API 模式, 签名类型: {signature_type})")
+            
+            # 启动心跳管理器（保持会话活跃）
+            self.heartbeat_manager = HeartbeatManager(self.client)
+            self.heartbeat_manager.start()
+
+            # 如果没有完整的 API 凭证，自动创建
+            if not (api_key and api_secret and passphrase):
+                print("[!] 缺少 API 凭证，正在自动创建...")
+                if self.create_api_credentials():
+                    print("[ API 凭证创建成功")
+                else:
+                    print("[X] API 凭证创建失败，将使用 L1 认证")
+
+        except Exception as e:
+            print(f"[X] 初始化客户端失败: {e}")
+            import traceback
+            traceback.print_exc()
+
+    # ==================== 市场数据方法 ====================
+
+    def get_tick_size(self, token_id: str) -> str:
+        """
+        获取代币的最小价格变动单位
+        
+        根据 Polymarket 官方文档：
+        - 每个订单都需要指定 tickSize
+        - 常见值：0.1 (1位小数), 0.01 (2位小数), 0.001 (3位小数), 0.0001 (4位小数)
+        
+        Args:
+            token_id: 代币ID
+            
+        Returns:
+            tick_size 字符串（如 "0.01"）
+        """
+        if not self.client or not token_id:
+            return "0.01"  # 默认值
+        
+        try:
+            tick_size = self.client.get_tick_size(token_id)
+            if tick_size:
+                return str(tick_size)
+        except Exception as e:
+            print(f"获取 tick_size 失败: {e}")
+        
+        return "0.01"  # 默认值
+    
+    def get_neg_risk(self, token_id: str) -> bool:
+        """
+        获取代币的 neg_risk 标志
+        
+        根据 Polymarket 官方文档：
+        - 多结果事件（3个及以上结果）使用 Neg Risk CTF Exchange
+        - 需要传递 negRisk: true
+        
+        Args:
+            token_id: 代币ID
+            
+        Returns:
+            True 如果是 neg_risk 市场，否则 False
+        """
+        if not self.client or not token_id:
+            return False
+        
+        try:
+            is_neg_risk = self.client.get_neg_risk(token_id)
+            return bool(is_neg_risk)
+        except Exception as e:
+            print(f"获取 neg_risk 失败: {e}")
+            return False
+    
+    def get_market_options(self, token_id: str) -> Dict[str, Any]:
+        """
+        获取市场的完整交易选项（tick_size 和 neg_risk）
+        
+        Args:
+            token_id: 代币ID
+            
+        Returns:
+            {"tick_size": "0.01", "neg_risk": False}
+        """
+        return {
+            "tick_size": self.get_tick_size(token_id),
+            "neg_risk": self.get_neg_risk(token_id)
+        }
+
+    def get_markets(
+        self, limit: int = 100, offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """获取市场列表（优化：应用速率限制）"""
+        if not self.client:
+            return []
+
+        try:
+            # 应用速率限制
+            rate_limit, window = self.RATE_LIMITS.get("get_markets", (300, 10))
+            self.rate_limiter.wait_if_needed("get_markets", rate_limit, window)
+
+            response = self.client.get_markets()
+            return response.get("data", [])
+        except Exception as e:
+            print(f"获取市场列表失败: {e}")
+            return []
+
+    def get_tradable_markets(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """获取可交易市场"""
+        if not self.client:
+            return []
+        try:
+            response = self.client.get_markets()
+            markets = response.get("data", [])
+            # 过滤可交易市场
+            return [m for m in markets if m.get("active", False)]
+        except Exception as e:
+            print(f"获取可交易市场失败: {e}")
+            return []
+
+    def get_market_by_slug(self, slug: str) -> Optional[Dict[str, Any]]:
+        """通过slug获取市场"""
+        if not self.client:
+            return None
+        try:
+            response = self.client.get_markets(limit=1000)
+            markets = response.get("data", [])
+            for market in markets:
+                if market.get("slug") == slug:
+                    return market
+            return None
+        except Exception as e:
+            print(f"获取市场失败: {e}")
+            return None
+
+    # ==================== 价格方法 ====================
+
+    def get_midpoints(
+        self, token_ids: List[str]
+    ) -> Dict[str, float]:
+        """
+        批量获取中间价（优化：应用速率限制）
+
+        Args:
+            token_ids: 代币ID列表
+
+        Returns:
+            {token_id: price}
+        """
+        if not self.client or not token_ids:
+            return {}
+
+        try:
+            # 应用速率限制
+            rate_limit, window = self.RATE_LIMITS.get("get_midpoints", (1500, 10))
+            self.rate_limiter.wait_if_needed("get_midpoints", rate_limit, window)
+
+            from py_clob_client.clob_types import BookParams
+
+            # 创建 BookParams 列表（官方 SDK 需要）
+            book_params = [BookParams(token_id=tid, side="0") for tid in token_ids]
+
+            response = self.client.get_midpoints(book_params)
+            return response.get("midpoints", {})
+        except Exception as e:
+            print(f"获取中间价失败: {e}")
+            return {}
+
+    def get_market_prices(
+        self, market_id: str
+    ) -> Dict[str, float]:
+        """
+        获取市场价格
+
+        Args:
+            market_id: 市场ID
+
+        Returns:
+            {"YES": price, "NO": price}
+        """
+        token_ids = self.get_token_ids(market_id)
+        if not token_ids:
+            return {}
+
+        yes_token_id = token_ids.get("YES")
+        no_token_id = token_ids.get("NO")
+
+        if not yes_token_id or not no_token_id:
+            return {}
+
+        # 方法1: 尝试使用 get_midpoints
+        try:
+            midpoints = self.get_midpoints([yes_token_id, no_token_id])
+            if midpoints:
+                yes_price = midpoints.get(yes_token_id, 0.0)
+                no_price = midpoints.get(no_token_id, 0.0)
+                if yes_price > 0 and no_price > 0:
+                    print(f"价格(中间价): YES=${yes_price:.2f}, NO=${no_price:.2f}")
+                    return {"YES": yes_price, "NO": no_price}
+        except Exception as e:
+            print(f"get_midpoints 失败: {e}")
+
+        # 方法2: 尝试使用 get_orderbook 获取价格
+        try:
+            yes_orderbook = self.get_orderbook(yes_token_id)
+            no_orderbook = self.get_orderbook(no_token_id)
+            
+            yes_bids = yes_orderbook.get("bids", [])
+            yes_asks = yes_orderbook.get("asks", [])
+            no_bids = no_orderbook.get("bids", [])
+            no_asks = no_orderbook.get("asks", [])
+            
+            if yes_bids and yes_asks:
+                yes_price = (yes_bids[0].get("price", 0) + yes_asks[0].get("price", 0)) / 2
+                no_price = 100 - yes_price
+                if yes_price > 0:
+                    print(f"价格(订单簿): YES=${yes_price:.2f}, NO=${no_price:.2f}")
+                    return {"YES": yes_price, "NO": no_price}
+        except Exception as e:
+            print(f"get_orderbook 获取价格失败: {e}")
+
+        # 方法3: 直接从市场数据获取
+        try:
+            market = self.get_market_by_id(market_id)
+            if market:
+                # 尝试从市场数据中获取价格
+                outcome_prices = market.get("outcomePrices", [])
+                if isinstance(outcome_prices, list) and len(outcome_prices) >= 2:
+                    yes_price = float(outcome_prices[0]) if outcome_prices[0] else 0
+                    no_price = float(outcome_prices[1]) if outcome_prices[1] else 0
+                    # Gamma API 返回的是百分比（如 75 表示 75%）
+                    yes_price = yes_price / 100 if yes_price > 1 else yes_price
+                    no_price = no_price / 100 if no_price > 1 else no_price
+                    if yes_price > 0:
+                        print(f"价格(市场): YES=${yes_price:.2f}, NO=${no_price:.2f}")
+                        return {"YES": yes_price, "NO": no_price}
+                
+                # 尝试其他可能的价格字段
+                for field in ["yes_price", "no_price", "price", "current_price"]:
+                    if field in market and market[field]:
+                        price = float(market[field])
+                        if price > 1:  # 如果大于1，可能是百分比
+                            price = price / 100
+                        # YES + NO = 1 (或 100)
+                        if price > 0:
+                            yes_price = price
+                            no_price = 1 - price
+                            print(f"价格({field}): YES=${yes_price:.2f}, NO=${no_price:.2f}")
+                            return {"YES": yes_price, "NO": no_price}
+        except Exception as e:
+            print(f"市场数据获取价格失败: {e}")
+
+        return {}
+
+    # ==================== 订单簿方法 ====================
+
+    def get_market_orderbook(
+        self, market_id: str
+    ) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
+        """
+        获取市场订单簿
+
+        Args:
+            market_id: 市场ID
+
+        Returns:
+            {"YES": {"bids": [...], "asks": [...]}, "NO": {...}}
+        """
+        token_ids = self.get_token_ids(market_id)
+        if not token_ids:
+            return {}
+
+        yes_token_id = token_ids.get("YES")
+        no_token_id = token_ids.get("NO")
+
+        if not yes_token_id or not no_token_id:
+            return {}
+
+        return {
+            "YES": self.get_orderbook(yes_token_id),
+            "NO": self.get_orderbook(no_token_id),
+        }
+
+    def get_orderbook(
+        self, token_id: str
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """
+        获取订单簿（优化：应用速率限制）
+
+        Args:
+            token_id: 代币ID
+
+        Returns:
+            {"bids": [...], "asks": [...]}
+        """
+        if not self.client or not token_id:
+            return {"bids": [], "asks": []}
+
+        try:
+            # 应用速率限制
+            rate_limit, window = self.RATE_LIMITS.get("get_orderbook", (1500, 10))
+            self.rate_limiter.wait_if_needed("get_orderbook", rate_limit, window)
+
+            response = self.client.get_order_book(token_id)
+
+            # OrderBookSummary 是对象，不是字典
+            bids_data = response.bids if hasattr(response, 'bids') else []
+            asks_data = response.asks if hasattr(response, 'asks') else []
+
+            # 转换 OrderSummary 为字典，并处理字符串类型的 price 和 size
+            bids = [
+                {
+                    "price": float(bid.price) if bid.price else 0.0,
+                    "size": float(bid.size) if bid.size else 0.0,
+                }
+                for bid in bids_data
+            ] if bids_data else []
+
+            asks = [
+                {
+                    "price": float(ask.price) if ask.price else 0.0,
+                    "size": float(ask.size) if ask.size else 0.0,
+                }
+                for ask in asks_data
+            ] if asks_data else []
+
+            return {"bids": bids, "asks": asks}
+
+        except Exception as e:
+            print(f"获取订单簿失败: {e}")
+            return {"bids": [], "asks": []}
+
+    # ==================== 身份验证方法 ====================
+
+    def create_api_credentials(self) -> Optional[Dict[str, str]]:
+        """
+        创建或派生 API 凭证（L1 身份验证）
+
+        使用私钥创建 API 凭证，用于 L2 身份验证。
+        如果凭证已存在，则派生现有凭证。
+
+        Returns:
+            {
+                "apiKey": "uuid",
+                "secret": "base64_encoded_secret",
+                "passphrase": "random_string"
+            }
+            或 None（如果失败）
+        """
+        if not self.client or not self.private_key:
+            print("[X] 需要私钥才能创建 API 凭证")
+            return None
+
+        try:
+            # 使用官方 SDK 创建或派生凭证
+            print("[*] 正在调用 create_or_derive_api_creds()...")
+            creds_obj = self.client.create_or_derive_api_creds()
+            print(f"[*] 返回类型: {type(creds_obj)}")
+            print(f"[*] 返回内容: {creds_obj}")
+
+            # ApiCreds 对象的属性访问（注意：属性名是 api_key, api_secret, api_passphrase）
+            self.api_key = creds_obj.api_key
+            self.api_secret = creds_obj.api_secret
+            self.passphrase = creds_obj.api_passphrase
+
+            # 创建 ApiCreds 对象供 SDK 使用
+            credentials = ApiCreds(
+                api_key=self.api_key,
+                api_secret=self.api_secret,
+                api_passphrase=self.passphrase
+            )
+
+            # 保存凭证（用于 .env 文件，使用 SDK 期望的键名）
+            env_credentials = {
+                "key": self.api_key,
+                "secret": self.api_secret,
+                "passphrase": self.passphrase
+            }
+
+            # 保存凭证
+            self.api_credentials = credentials
+
+            print(f"[OK] API 凭证创建/派生成功")
+            print(f"  API Key: {self.api_key[:20]}...")
+            print(f"  Secret: {self.api_secret[:20]}...")
+            print(f"  Passphrase: {self.passphrase[:10]}...")
+
+            # 保存到 .env 文件
+            self._save_credentials_to_env(env_credentials)
+
+            # 返回凭证信息
+            return credentials
+
+        except Exception as e:
+            print(f"[X] 创建 API 凭证失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+    def _save_credentials_to_env(self, credentials: Dict[str, str]) -> bool:
+        """保存 API 凭证到 .env 文件"""
+        try:
+            env_path = Path.cwd() / ".env"
+            if not env_path.exists():
+                print("[X] .env 文件不存在，跳过保存凭证")
+                return False
+
+            # 读取现有 .env 文件
+            with open(env_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+
+            # 更新凭证（credentials 使用 key, secret, passphrase 键名）
+            new_lines = []
+            for line in lines:
+                if line.startswith("API_KEY="):
+                    new_lines.append(f"API_KEY={credentials.get('key', '')}\n")
+                elif line.startswith("API_SECRET="):
+                    new_lines.append(f"API_SECRET={credentials.get('secret', '')}\n")
+                elif line.startswith("PASSPHRASE="):
+                    new_lines.append(f"PASSPHRASE={credentials.get('passphrase', '')}\n")
+                else:
+                    new_lines.append(line)
+
+            # 写回文件
+            with open(env_path, 'w', encoding='utf-8') as f:
+                f.writelines(new_lines)
+
+            print(f"[OK] 凭证已保存到 .env 文件")
+            return True
+
+        except Exception as e:
+            print(f"[X] 保存凭证失败: {e}")
+            return False
+
+    # ==================== 授权管理方法 ====================
+    
+    def check_and_initialize_allowance(self) -> Dict[str, Any]:
+        """
+        检查并初始化授权
+        
+        根据 Polymarket 官方文档：
+        - 下单前必须授权 Exchange 合约使用你的资产
+        - BUY 订单需要 USDC.e 授权额度 >= 花费金额
+        
+        Returns:
+            {"balance": float, "allowance": float, "initialized": bool}
+        """
+        if not self.client:
+            return {"balance": 0.0, "allowance": 0.0, "initialized": False, "error": "Client not initialized"}
+        
+        result = {
+            "balance": 0.0,
+            "allowance": 0.0,
+            "initialized": False,
+            "error": None
+        }
+        
+        try:
+            # 1. 检查当前授权状态
+            print("[*] 检查授权状态...")
+            try:
+                allowance_info = self.client.get_balance_allowance()
+                if allowance_info:
+                    result["balance"] = float(allowance_info.get("balance", 0) or 0)
+                    result["allowance"] = float(allowance_info.get("allowance", 0) or 0)
+                    print(f"[*] 当前余额: ${result['balance']:.2f}")
+                    print(f"[*] 当前授权额度: ${result['allowance']:.2f}")
+            except Exception as e:
+                print(f"[!] get_balance_allowance() 失败: {e}")
+            
+            # 2. 如果授权额度不足，尝试更新授权
+            if result["allowance"] < result["balance"] or result["allowance"] == 0:
+                print("[*] 授权额度不足，尝试更新授权...")
+                try:
+                    update_result = self.client.update_balance_allowance()
+                    if update_result:
+                        success = update_result.get("success", False)
+                        new_allowance = update_result.get("value", "")
+                        
+                        if success or new_allowance:
+                            # 检查是否设置了无限授权
+                            if "115792089237316195423570985008687907853269984665640564039457584007913129639935" in str(new_allowance):
+                                print("[OK] 已设置无限授权额度")
+                                result["allowance"] = float("inf")
+                                result["initialized"] = True
+                            else:
+                                result["allowance"] = float(new_allowance) if new_allowance else float("inf")
+                                result["initialized"] = True
+                            print(f"[OK] 授权更新成功，新授权额度: ${result['allowance']:.2f}")
+                        else:
+                            print(f"[X] 授权更新失败: {update_result}")
+                            result["error"] = "Failed to update allowance"
+                    else:
+                        print("[X] 授权更新返回空结果")
+                        result["error"] = "Empty update result"
+                except Exception as e:
+                    print(f"[X] update_balance_allowance() 失败: {e}")
+                    result["error"] = str(e)
+            else:
+                print("[OK] 授权状态正常")
+                result["initialized"] = True
+                
+            # 3. 再次检查余额确认
+            if result["initialized"]:
+                try:
+                    # 使用 get_balance_allowance 而不是不存在的 get_balance
+                    resp = self.client.get_balance_allowance()
+                    if resp:
+                        if isinstance(resp, dict):
+                            balance = resp.get("balance", 0)
+                        else:
+                            balance = resp
+                        result["balance"] = float(balance)
+                        print(f"[OK] 最终余额: ${result['balance']:.2f}")
+                except Exception:
+                    pass
+                    
+        except Exception as e:
+            print(f"[X] 授权检查失败: {e}")
+            result["error"] = str(e)
+        
+        return result
+
+
+# === Helper Functions ===
+
+def quick_get_price(client: PolymarketClient, token_id: str) -> float:
+    """快速获取单个代币的价格（用于高频监控）
+    
+    Args:
+        client: PolymarketClient 实例
+        token_id: 代币ID
+        
+    Returns:
+        价格（0-100），获取失败返回 -1
+    """
+    try:
+        orders = client.get_orders(token_id)
+        if orders and len(orders) > 0:
+            return orders[0].get("price", 0)
+        return -1
+    except:
+        return -1
+
+    def has_api_credentials(self) -> bool:
+        """检查是否有完整的 API 凭证"""
+        return all([
+            self.api_key,
+            self.api_secret,
+            self.passphrase
+        ])
+
+    def get_wallet_address(self) -> Optional[str]:
+        """
+        获取钱包地址
+
+        Returns:
+            钱包地址字符串或 None
+        """
+        if not self.client or not self.private_key:
+            return None
+
+        try:
+            address = self.client.get_address()
+            return address
+        except Exception as e:
+            print(f"[X] 获取钱包地址失败: {e}")
+            return None
+
+    # ==================== 交易方法 ====================
+
+    def get_balance(self) -> float:
+        """获取账户余额"""
+        if not self.client:
+            return 0.0
+
+        # 方法列表（按优先级尝试）
+        methods = [
+            # 方法1: 直接获取余额
+            lambda: self._get_balance_direct(),
+            # 方法2: 获取 allowance
+            lambda: self._get_balance_from_allowance(),
+            # 方法3: 获取 USDC 余额
+            lambda: self._get_usdc_balance(),
+            # 方法4: 获取钱包余额
+            lambda: self._get_wallet_balance(),
+        ]
+
+        for method in methods:
+            try:
+                balance = method()
+                if balance is not None and balance >= 0:
+                    return balance
+            except Exception:
+                continue
+
+        return 0.0
+
+    def _get_balance_direct(self) -> float:
+        """方法1: 直接获取余额"""
+        try:
+            resp = self.client.get_balance_allowance()
+            if resp and isinstance(resp, (dict, float, int)):
+                if isinstance(resp, dict):
+                    return float(resp.get("balance", 0))
+                return float(resp)
+        except Exception:
+            pass
+        return None
+
+    def _get_balance_from_allowance(self) -> float:
+        """方法2: 从 allowance 获取余额"""
+        try:
+            resp = self.client.get_allowances()
+            if resp and isinstance(resp, dict):
+                return float(resp.get("balance", 0))
+        except Exception:
+            pass
+        return None
+
+    def _get_usdc_balance(self) -> float:
+        """方法3: 获取 USDC 余额"""
+        try:
+            resp = self.client.get_usdc_balance()
+            if resp and isinstance(resp, (dict, float, int)):
+                if isinstance(resp, dict):
+                    return float(resp.get("balance", 0))
+                return float(resp)
+        except Exception:
+            pass
+        return None
+
+    def _get_wallet_balance(self) -> float:
+        """方法4: 获取钱包余额"""
+        try:
+            resp = self.client.get_wallet_balance()
+            if resp and isinstance(resp, (dict, float, int)):
+                if isinstance(resp, dict):
+                    return float(resp.get("balance", 0))
+                return float(resp)
+        except Exception:
+            pass
+        return None
+
+    def create_order(
+        self,
+        token_id: str,
+        price: float,
+        size: float,
+        side: str,  # "BUY" or "SELL"
+        order_type: str = "GTC",  # GTC, GTD, FOK, FAK
+        expiration: int = None,  # GTD 订单的过期时间戳
+    ) -> Dict[str, Any]:
+        """
+        创建并提交订单（官方推荐方式）
+        
+        根据 Polymarket 官方文档：
+        - 使用 create_and_post_order() 一步完成创建、签名和提交
+        - GTC: Good Till Cancelled - 挂单直到成交或取消（默认）
+        - GTD: Good Till Date - 到指定时间自动过期
+        - FOK: Fill Or Kill - 全部成交或立即取消
+        - FAK: Fill And Kill - 成交可成交的部分，取消剩余
+        
+        Args:
+            token_id: 代币ID
+            price: 价格（支持两种格式：整数如75 或小数如0.75）
+            size: 数量（股数）
+            side: 方向 (BUY/SELL)
+            order_type: 订单类型 (GTC/GTD/FOK/FAK)
+            expiration: GTD 订单的过期时间戳（Unix 时间戳 + 60秒缓冲）
+
+        Returns:
+            订单响应，包含 orderID, status 等字段
+        """
+        if not self.client:
+            return {"success": False, "errorMsg": "Client not initialized"}
+
+        try:
+            # 价格格式转换：Polymarket API 使用小数格式（0.75），不是整数（75）
+            if price > 1:
+                api_price = price / 100.0
+            else:
+                api_price = price
+
+            # 获取市场的 tick_size 和 neg_risk
+            options = self.get_market_options(token_id)
+            
+            # 构建订单参数
+            order_args = {
+                "token_id": token_id,
+                "price": api_price,
+                "size": size,
+                "side": side.upper(),
+            }
+            
+            # GTD 订单需要设置过期时间
+            if order_type == "GTD" and expiration:
+                order_args["expiration"] = expiration
+
+            # 根据订单类型选择不同的方法
+            if order_type in ["FOK", "FAK"]:
+                # 市价单：使用 amount（美元金额）而非 size（股数）
+                order_args["amount"] = size * api_price  # 市价单的金额
+                order_args["price"] = api_price  # 最差价格限制
+                response = self.client.create_and_post_market_order(
+                    token_id=token_id,
+                    side=side.upper(),
+                    amount=size * api_price,
+                    price=api_price,
+                    options=options,
+                    order_type=OrderType.FOK if order_type == "FOK" else OrderType.FAK,
+                )
+            else:
+                # 限价单：使用官方推荐的 OrderArgs
+                args = OrderArgs(**order_args)
+                order_type_enum = OrderType.GTC
+                if order_type == "GTD":
+                    order_type_enum = OrderType.GTD
+                    
+                response = self.client.create_and_post_order(
+                    args=args,
+                    options=options,
+                    order_type=order_type_enum,
+                )
+
+            # 解析响应
+            if response:
+                order_id = response.get("orderID") or response.get("order_id", "")
+                status = response.get("status", "unknown")
+                success = response.get("success", True) and response.get("errorMsg", "") == ""
+                
+                print(f"[OK] 订单创建成功: ID={order_id[:20]}..., status={status}")
+                return {
+                    "success": success,
+                    "orderID": order_id,
+                    "status": status,
+                    "errorMsg": response.get("errorMsg", ""),
+                    "filled": 0,
+                }
+            else:
+                return {"success": False, "errorMsg": "Empty response"}
+
+        except Exception as e:
+            print(f"[X] 创建订单失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return {"success": False, "errorMsg": str(e)}
+
+    def create_gtc_order(
+        self,
+        token_id: str,
+        price: float,
+        size: float,
+        side: str,
+    ) -> Dict[str, Any]:
+        """创建 GTC 订单（Good Till Cancelled）"""
+        return self.create_order(token_id, price, size, side, "GTC")
+    
+    def create_gtd_order(
+        self,
+        token_id: str,
+        price: float,
+        size: float,
+        side: str,
+        duration_seconds: int = 300,
+    ) -> Dict[str, Any]:
+        """创建 GTD 订单（Good Till Date）
+        
+        Args:
+            duration_seconds: 订单有效期（秒），默认 300 秒（5分钟）
+        """
+        expiration = int(time.time()) + 60 + duration_seconds  # +60 秒安全缓冲
+        return self.create_order(token_id, price, size, side, "GTD", expiration)
+    
+    def create_fok_order(
+        self,
+        token_id: str,
+        price: float,
+        size: float,
+        side: str,
+    ) -> Dict[str, Any]:
+        """创建 FOK 订单（Fill Or Kill）- 必须全部成交或取消"""
+        return self.create_order(token_id, price, size, side, "FOK")
+
+    def cancel_order(self, order_id: str) -> Dict[str, Any]:
+        """取消订单"""
+        if not self.client or not order_id:
+            return {"success": False, "errorMsg": "Invalid order ID"}
+
+        try:
+            response = self.client.cancel(order_id)
+            success = response.get("success", False) if response else False
+            if success:
+                print(f"[OK] 订单已取消: {order_id[:20]}...")
+            else:
+                print(f"[X] 取消订单失败: {response.get('errorMsg', 'Unknown error')}")
+            return response or {"success": False}
+        except Exception as e:
+            print(f"[X] 取消订单失败: {e}")
+            return {"success": False, "errorMsg": str(e)}
+
+    def get_open_orders(self) -> List[Dict[str, Any]]:
+        """获取未成交订单"""
+        if not self.client:
+            return []
+
+        try:
+            response = self.client.get_orders()
+            return response.get("orders", [])
+        except Exception as e:
+            print(f"获取未成交订单失败: {e}")
+            return []
+    
+    def get_pending_orders_count(self) -> int:
+        """获取未成交订单数量（快速检查）"""
+        return len(self.get_open_orders())
+
+    def get_order(self, order_id: str) -> Optional[Dict[str, Any]]:
+        """
+        获取单个订单状态
+        
+        Args:
+            order_id: 订单ID
+            
+        Returns:
+            订单信息字典，包含 filled_size 等字段
+        """
+        if not self.client or not order_id:
+            return None
+
+        try:
+            response = self.client.get_order(order_id)
+            return response
+        except Exception as e:
+            print(f"获取订单状态失败: {e}")
+            return None
+
+    # ==================== 便捷方法 ====================
+
+    def get_token_ids(self, market_id: str) -> Dict[str, str]:
+        """
+        获取市场的代币ID（带 TTL 缓存）
+
+        Args:
+            market_id: 市场ID
+
+        Returns:
+            {"YES": "xxx", "NO": "xxx"}
+        """
+        # 检查 TTL 缓存
+        cached = self.token_ids_cache.get(market_id)
+        if cached is not None:
+            self._record_cache_hit()
+            return cached
+
+        # 获取市场详情
+        market = self.get_market_by_id(market_id)
+        if not market:
+            return {}
+
+        # 获取 token IDs，处理不同的数据格式
+        token_ids_raw = market.get("clobTokenIds", {}) or market.get("tokens", {})
+        token_ids = {}
+
+        if isinstance(token_ids_raw, dict):
+            token_ids = token_ids_raw
+        elif isinstance(token_ids_raw, str):
+            try:
+                import json
+                parsed = json.loads(token_ids_raw)
+                if isinstance(parsed, dict):
+                    token_ids = parsed
+                elif isinstance(parsed, list) and len(parsed) >= 2:
+                    token_ids = {"YES": parsed[0], "NO": parsed[1]}
+            except:
+                pass
+        elif isinstance(token_ids_raw, list) and len(token_ids_raw) >= 2:
+            token_ids = {"YES": token_ids_raw[0], "NO": token_ids_raw[1]}
+
+        # 验证
+        if isinstance(token_ids, dict) and "YES" in token_ids and "NO" in token_ids:
+            self.token_ids_cache.set(market_id, token_ids)
+            return token_ids
+
+        return {}
+
+    def clear_cache(self) -> None:
+        """清除所有缓存"""
+        self.token_ids_cache.clear()
+        self.market_details_cache.clear()
+        self.prices_cache.clear()
+        self.orderbook_cache.clear()
+
+    def get_api_stats(self) -> Dict[str, Any]:
+        """获取 API 调用统计"""
+        with self._stats_lock:
+            stats = self._api_stats.copy()
+            stats["uptime"] = time.time() - stats["last_reset"]
+            return stats
+
+    def _record_api_call(self, success: bool = True) -> None:
+        """记录 API 调用"""
+        with self._stats_lock:
+            self._api_stats["calls"] += 1
+            if not success:
+                self._api_stats["errors"] += 1
+
+    def _record_cache_hit(self) -> None:
+        """记录缓存命中"""
+        with self._stats_lock:
+            self._api_stats["cache_hits"] += 1
+
+    def get_market_by_id(self, market_id: str) -> Optional[Dict[str, Any]]:
+        """通过ID获取市场（带 TTL 缓存）
+
+        使用 Gamma API 直接查询，避免获取全部市场列表
+        """
+        # 检查 TTL 缓存
+        cached = self.market_details_cache.get(market_id)
+        if cached is not None:
+            self._record_cache_hit()
+            return cached
+
+        # 应用速率限制
+        limit, window = self.RATE_LIMITS.get("get_markets", (300, 10))
+        self.rate_limiter.wait_if_needed("get_markets", limit, window)
+
+        try:
+            # 使用 Gamma API 直接查询
+            url = f"{self.GAMMA_API_BASE}/markets?condition_id={market_id}"
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+            self._record_api_call(True)
+
+            data = response.json()
+
+            # 处理响应格式
+            if isinstance(data, list):
+                markets = data
+            elif isinstance(data, dict) and "data" in data:
+                markets = data["data"]
+            else:
+                return None
+
+            if markets and isinstance(markets, list):
+                market = markets[0]
+                
+                # 处理代币信息字段
+                if "clobTokenIds" not in market or not market["clobTokenIds"]:
+                    for field in ["token", "tokens", "clobTokenId"]:
+                        if field in market and market[field]:
+                            if isinstance(market[field], dict):
+                                market["clobTokenIds"] = market[field]
+                                break
+                            elif isinstance(market[field], str):
+                                try:
+                                    import json
+                                    market["clobTokenIds"] = json.loads(market[field])
+                                    break
+                                except:
+                                    pass
+                
+                # 缓存结果
+                self.market_details_cache.set(market_id, market)
+                return market
+
+            return None
+
+        except Exception as e:
+            self._record_api_call(False)
+            return None
+    
+    def health_check(self) -> Dict[str, Any]:
+        """健康检查 - 检查客户端和服务状态
+        
+        Returns:
+            {"status": "ok" | "degraded" | "error", "details": {...}}
+        """
+        result = {
+            "status": "ok",
+            "client_initialized": self.client is not None,
+            "rate_limiter": {},
+            "api_stats": {},
+            "errors": []
+        }
+        
+        # 检查速率限制器
+        if hasattr(self, 'rate_limiter') and self.rate_limiter:
+            result["rate_limiter"]["active"] = True
+        
+        # 获取 API 统计
+        result["api_stats"] = self.get_api_stats()
+        
+        # 检查错误率
+        stats = result["api_stats"]
+        if stats["calls"] > 0:
+            error_rate = stats["errors"] / stats["calls"]
+            if error_rate > 0.1:  # 超过10%错误率
+                result["status"] = "degraded"
+                result["errors"].append(f"High error rate: {error_rate:.1%}")
+        
+        # 如果客户端未初始化，状态为错误
+        if not result["client_initialized"]:
+            result["status"] = "error"
+            result["errors"].append("Client not initialized")
+        
+        return result
