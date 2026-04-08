@@ -515,35 +515,38 @@ class TradingEngine:
         try:
             # 获取最新活跃市场列表（专门获取BTC 5分钟市场）
             try:
-                # 首先尝试通过已知slug格式直接获取（考虑时区）
-                import time
+                # 计算正确的5分钟周期slug（美东时间）
                 from datetime import datetime, timezone, timedelta
                 
                 # 美东时区 (EDT in April = UTC-4)
                 edt = timezone(timedelta(hours=-4))
                 now_edt = datetime.now(edt)
                 
-                # 计算当前美东时间的5分钟周期时间戳
+                # 计算下一个5分钟周期的开始时间（向上取整）
+                # 例如: 2:58 -> 下一个周期从 3:00 开始
                 current_minute = now_edt.minute
                 current_second = now_edt.second
                 
-                # 向下取整到当前5分钟周期的开始
-                # 例如: 14:52:30 -> 14:50:00
-                minutes_into_period = (current_minute % 5) * 60 + current_second
-                period_start = now_edt.replace(second=0, microsecond=0)
-                # 调整到当前5分钟周期的开始
-                minutes_offset = current_minute % 5
-                period_start = period_start.replace(minute=current_minute - minutes_offset)
+                # 计算需要加多少分钟到下一个5分钟边界
+                minutes_to_next = 5 - (current_minute % 5)
+                if current_second > 0:
+                    minutes_to_next = minutes_to_next
+                else:
+                    minutes_to_next = 0
+                
+                # 下一个周期开始时间
+                from datetime import timedelta
+                next_period_start = now_edt + timedelta(minutes=minutes_to_next)
+                next_period_start = next_period_start.replace(second=0, microsecond=0)
                 
                 # 转换为 Unix 时间戳
-                period_ts = int(period_start.timestamp())
+                next_period_ts = int(next_period_start.timestamp())
                 
-                # 生成当前和下一个5分钟周期的slug
-                current_slug = f"btc-updown-5m-{period_ts}"
-                next_slug = f"btc-updown-5m-{period_ts + 300}"
+                # 生成slug
+                current_slug = f"btc-updown-5m-{next_period_ts}"
                 
                 print(f"[*] 美东时间: {now_edt.strftime('%Y-%m-%d %H:%M:%S')}")
-                print(f"[*] 当前周期时间戳: {period_ts}")
+                print(f"[*] 下一个5分钟周期: {next_period_start.strftime('%H:%M')}")
                 print(f"[*] 尝试获取BTC 5分钟市场: {current_slug}")
                 
                 market = self.client.get_market_by_slug(current_slug)
