@@ -925,17 +925,40 @@ class PolymarketClient:
             with open(env_path, 'r', encoding='utf-8') as f:
                 lines = f.readlines()
 
-            # 更新凭证（credentials 使用 key, secret, passphrase 键名）
+            # 凭证键名映射（credentials 使用 key, secret, passphrase）
+            cred_mapping = {
+                "API_KEY=": credentials.get("key", ""),
+                "API_SECRET=": credentials.get("secret", ""),
+                "PASSPHRASE=": credentials.get("passphrase", ""),
+            }
+            
+            # 检查是否需要添加新凭证行
+            has_api_key = any(line.startswith("API_KEY=") for line in lines)
+            has_api_secret = any(line.startswith("API_SECRET=") for line in lines)
+            has_passphrase = any(line.startswith("PASSPHRASE=") for line in lines)
+
+            # 更新或添加凭证
             new_lines = []
             for line in lines:
                 if line.startswith("API_KEY="):
-                    new_lines.append(f"API_KEY={credentials.get('key', '')}\n")
+                    new_lines.append(f"API_KEY={cred_mapping['API_KEY=']}\n")
+                    has_api_key = False  # 已处理
                 elif line.startswith("API_SECRET="):
-                    new_lines.append(f"API_SECRET={credentials.get('secret', '')}\n")
+                    new_lines.append(f"API_SECRET={cred_mapping['API_SECRET=']}\n")
+                    has_api_secret = False  # 已处理
                 elif line.startswith("PASSPHRASE="):
-                    new_lines.append(f"PASSPHRASE={credentials.get('passphrase', '')}\n")
+                    new_lines.append(f"PASSPHRASE={cred_mapping['PASSPHRASE=']}\n")
+                    has_passphrase = False  # 已处理
                 else:
                     new_lines.append(line)
+            
+            # 如果凭证行不存在，添加到文件末尾
+            if has_api_key:
+                new_lines.append(f"API_KEY={cred_mapping['API_KEY=']}\n")
+            if has_api_secret:
+                new_lines.append(f"API_SECRET={cred_mapping['API_SECRET=']}\n")
+            if has_passphrase:
+                new_lines.append(f"PASSPHRASE={cred_mapping['PASSPHRASE=']}\n")
 
             # 写回文件
             with open(env_path, 'w', encoding='utf-8') as f:
