@@ -1416,15 +1416,24 @@ class PolymarketClient:
                 neg_risk=neg_risk,
             )
             
+            # 使用 create_order + post_order 两步操作，支持 order_type
+            # create_order: 创建并签名订单
+            # post_order: 提交订单（传递 orderType）
+            signed_order = self.client.create_order(
+                args,
+                options=order_options,
+            )
+            
             # 根据订单类型选择 OrderType
+            from py_clob_client.clob_types import OrderType
             order_type_enum = OrderType.GTC
             if order_type == "GTD":
                 order_type_enum = OrderType.GTD
             
-            response = self.client.create_and_post_order(
-                args,
-                options=order_options,
-                order_type=order_type_enum,
+            # post_order: 提交订单
+            response = self.client.post_order(
+                signed_order,
+                orderType=order_type_enum,
             )
 
             # 解析响应
