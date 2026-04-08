@@ -658,7 +658,14 @@ class TradingEngine:
         
         策略：
         - 每次用余额的 1/12 开仓
-        - 当余额 > 初始余额 × 3^n 时，开仓金额扩大 2^n 倍
+        - 余额 > 初始×3 → 基础翻倍
+        - 余额 > 初始×9 → 再次翻倍 (在上一阶段基础上)
+        - 余额 > 初始×27 → 再次翻倍
+        
+        示例：初始余额 $12
+        - 余额 $12   → $12/12 × 1 = $1
+        - 余额 $36   → $36/12 × 2 = $6 (上一阶段的2倍)
+        - 余额 $108  → $108/12 × 4 = $36 (上一阶段的2倍)
         """
         # 使用从 API 读取的初始余额，而非配置值
         initial_balance = self.initial_balance if self.initial_balance > 0 else self.config.initial_balance
@@ -666,12 +673,13 @@ class TradingEngine:
         # 基础开仓 = 余额的 1/12
         base_position = self.balance / 12.0
         
-        # 计算倍数：余额是初始余额的 3^n 时，开仓扩大 2^n 倍
-        if self.balance >= initial_balance * 3:
-            n = int(math.log(self.balance / initial_balance, 3))
-            multiplier = 2 ** n
-        else:
-            multiplier = 1
+        # 计算翻倍倍数：在上一阶段基础上 ×2
+        # 余额 > 初始×3^n 时，倍数 = 2^n
+        multiplier = 1
+        power = 1
+        while self.balance >= initial_balance * (3 ** power):
+            multiplier = 2 ** power
+            power += 1
         
         position_size = base_position * multiplier
         position_size = math.floor(position_size)
