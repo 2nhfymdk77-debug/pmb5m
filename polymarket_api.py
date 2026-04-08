@@ -573,9 +573,7 @@ class PolymarketClient:
             params = {
                 "active": "true",
                 "closed": "false",
-                "limit": limit,
-                "order": "start_date",
-                "ascending": "false"
+                "limit": limit
             }
             headers = {
                 "Content-Type": "application/json",
@@ -584,6 +582,7 @@ class PolymarketClient:
             response = requests.get(url, params=params, headers=headers, timeout=10)
             if response.status_code == 200:
                 events = response.json()
+                print(f"[*] 获取到 {len(events)} 个活跃事件")
                 # 事件包含 markets 数组，我们需要提取市场信息
                 result = []
                 for event in events:
@@ -637,15 +636,14 @@ class PolymarketClient:
             params = {
                 "active": "true",
                 "closed": "false",
-                "limit": limit,
-                "order": "start_date",
-                "ascending": "false"
+                "limit": limit
             }
             headers = {"Accept": "application/json"}
             response = requests.get(url, params=params, headers=headers, timeout=10)
             
             if response.status_code == 200:
                 events = response.json()
+                print(f"[*] 获取到 {len(events)} 个活跃事件")
                 result = []
                 for event in events:
                     slug = event.get("slug", "").lower()
@@ -659,10 +657,10 @@ class PolymarketClient:
                             result.append(market_copy)
                         if len(result) >= limit:
                             break
-                print(f"[*] 获取到 {len(result)} 个BTC 5分钟市场")
+                print(f"[*] 匹配到 {len(result)} 个BTC 5分钟市场")
                 return result
             else:
-                print(f"获取BTC市场失败: {response.status_code}")
+                print(f"获取BTC市场失败: {response.status_code} - {response.text[:200]}")
                 return []
         except Exception as e:
             print(f"获取BTC市场失败: {e}")
@@ -697,9 +695,7 @@ class PolymarketClient:
             params = {
                 "active": "true",
                 "closed": "false",
-                "limit": limit,
-                "order": "start_date",
-                "ascending": "false"
+                "limit": limit
             }
             
             if crypto_tag_id:
