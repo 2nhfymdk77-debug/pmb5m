@@ -302,17 +302,35 @@ class TradingEngine:
         stop_loss_display = self.config.stop_loss / 100.0 if self.config.stop_loss > 1 else self.config.stop_loss
         take_profit_display = self.config.take_profit / 100.0 if self.config.take_profit > 1 else self.config.take_profit
         
-        # 显示市场详情
-        market_question = self.client.get_market_question(self.yes_token_id) if self.yes_token_id else "Unknown"
-        market_slug = self.client.get_market_slug(self.yes_token_id) if self.yes_token_id else "Unknown"
-        condition_id = self.client.get_condition_id(self.yes_token_id) if self.yes_token_id else "Unknown"
+        # 使用 market_id 获取市场详情（比 token_id 更可靠）
+        market_info = None
+        market_question = "Unknown"
+        market_slug = "Unknown"
+        condition_id = self.config.market_id if self.config.market_id else "Unknown"
+        
+        print(f"[诊断] market_id: {self.config.market_id[:30] if self.config.market_id else 'None'}...")
+        
+        if self.config.market_id:
+            try:
+                print(f"[诊断] 正在通过 API 获取市场详情...")
+                market_info = self.client.get_market_by_id(self.config.market_id)
+                print(f"[诊断] API 返回: {type(market_info)}")
+                if market_info:
+                    market_question = market_info.get("question", "Unknown")
+                    market_slug = market_info.get("slug", "Unknown")
+                    print(f"[诊断] question: {market_question[:50]}...")
+                    print(f"[诊断] slug: {market_slug}")
+                else:
+                    print(f"[诊断] market_info 为空")
+            except Exception as e:
+                print(f"[诊断] 获取市场详情失败: {e}")
         
         print("\n" + "=" * 60)
         print("[!]  首次下单确认  [!]")
         print("=" * 60)
         print(f"  市场问题:     {market_question[:50]}..." if len(market_question) > 50 else f"  市场问题:     {market_question}")
         print(f"  市场Slug:     {market_slug}")
-        print(f"  Condition ID: {condition_id}")
+        print(f"  Condition ID: {condition_id[:30]}..." if len(condition_id) > 30 else f"  Condition ID: {condition_id}")
         print(f"  YES Token:    {self.yes_token_id[:20]}..." if self.yes_token_id else "  YES Token:    N/A")
         print(f"  NO Token:     {self.no_token_id[:20]}..." if self.no_token_id else "  NO Token:     N/A")
         print("-" * 60)
