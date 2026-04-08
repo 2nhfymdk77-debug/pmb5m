@@ -519,10 +519,9 @@ class TradingEngine:
                 if not markets:
                     raise TradingError("无法获取活跃市场列表")
                 
-                # 过滤比特币5分钟预测市场
-                # Polymarket 的比特币5分钟市场通常 slug 包含 "bitcoin" 和 "5" 或 "min"
+                # 过滤比特币5分钟预测市场（只用于这个！）
                 bitcoin_keywords = ["bitcoin", "btc"]
-                time_keywords = ["5 min", "5min", "5-min", "5m"]
+                time_keywords = ["5 min", "5min", "5-min", "5m", "5 second", "5sec"]
                 
                 bitcoin_markets = []
                 for m in markets:
@@ -532,21 +531,18 @@ class TradingEngine:
                     has_btc = any(kw in question or kw in slug for kw in bitcoin_keywords)
                     # 包含时间相关词（5分钟预测）
                     has_time = any(kw in question or kw in slug for kw in time_keywords)
-                    if has_btc:
-                        bitcoin_markets.append((m, has_time))
+                    if has_btc and has_time:
+                        bitcoin_markets.append(m)
                 
-                # 优先选择同时包含时间和比特币关键词的市场
-                bitcoin_only_markets = [m for m, has_time in bitcoin_markets if has_time]
-                if bitcoin_only_markets:
-                    current_market = bitcoin_only_markets[0]
-                    print(f"[调试] 找到 {len(bitcoin_only_markets)} 个比特币5分钟市场")
-                elif bitcoin_markets:
-                    # 如果没有精确匹配，使用包含比特币的市场
-                    current_market = bitcoin_markets[0][0]
-                    print(f"[警告] 未找到5分钟市场，使用比特币市场: {current_market.get('question', 'Unknown')[:50]}")
+                # 必须找到比特币5分钟市场，否则等待下一个周期
+                if bitcoin_markets:
+                    current_market = bitcoin_markets[0]
+                    print(f"[调试] 找到比特币5分钟市场: {current_market.get('question', 'Unknown')[:60]}")
                 else:
-                    current_market = markets[0]
-                    print(f"[警告] 未找到比特币市场，使用: {current_market.get('question', 'Unknown')[:50]}")
+                    # 没有找到合适的市场，等待10秒后重试
+                    print(f"[警告] 未找到比特币5分钟市场，等待重试...")
+                    time.sleep(10)
+                    return None
                 
                 current_market_id = current_market.get("condition_id", "")
                 
