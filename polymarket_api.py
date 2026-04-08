@@ -1418,6 +1418,18 @@ class PolymarketClient:
             tick_size = self.get_tick_size(token_id)
             neg_risk = self.get_neg_risk(token_id)
             
+            # === 下单诊断 ===
+            print(f"[诊断] 下单参数:")
+            print(f"  - token_id: {token_id[:20]}...")
+            print(f"  - price: {api_price}")
+            print(f"  - size: {size}")
+            print(f"  - side: {side.upper()}")
+            print(f"  - tick_size: {tick_size}")
+            print(f"  - neg_risk: {neg_risk}")
+            print(f"  - signature_type: {self.signature_type}")
+            print(f"  - client.creds: {self.client.creds is not None if self.client else 'client is None'}")
+            print(f"  - client.signer: {self.client.signer if self.client else 'None'}")
+            
             # 限价单：使用官方推荐的 OrderArgs（直接作为位置参数）
             # OrderArgs 签名: (token_id, price, size, side, fee_rate_bps=0, nonce=0, expiration=0, taker='0x...')
             # GTD 订单需要设置 expiration 参数
@@ -1436,6 +1448,8 @@ class PolymarketClient:
                 neg_risk=neg_risk,
             )
             
+            print(f"[诊断] 正在调用 create_order...")
+            
             # 使用 create_order + post_order 两步操作，支持 order_type
             # create_order: 创建并签名订单
             # post_order: 提交订单（传递 orderType）
@@ -1444,11 +1458,15 @@ class PolymarketClient:
                 options=order_options,
             )
             
+            print(f"[诊断] create_order 返回: {signed_order}")
+            
             # 根据订单类型选择 OrderType
             from py_clob_client.clob_types import OrderType
             order_type_enum = OrderType.GTC
             if order_type == "GTD":
                 order_type_enum = OrderType.GTD
+            
+            print(f"[诊断] 正在调用 post_order...")
             
             # post_order: 提交订单
             response = self.client.post_order(
