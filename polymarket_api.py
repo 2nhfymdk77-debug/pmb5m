@@ -474,26 +474,12 @@ class PolymarketClient:
                 print("[!] .env 中凭证无效，尝试自动创建...")
 
             # 自动检测签名类型
-            # 注意：signature_type=0 (EOA) 需要私钥直接签名
-            # signature_type=2 (GNOSIS_SAFE) 需要多签钱包设置
-            # 如果提供了私钥但使用 GNOSIS_SAFE，签名会失败
-            # 重要：切换签名类型后，API 凭证需要重新创建！
-            if signature_type == 2 and private_key:
-                print("[!] 警告: signature_type=2 (GNOSIS_SAFE) 但提供了私钥")
-                print("[*] 自动切换到 signature_type=0 (EOA) 使用私钥签名")
-                print("[!] 重要：请重新创建 API 凭证（切换签名类型后旧凭证无效）")
-                signature_type = 0
-                self.signature_type = 0
-                # 清除旧凭证，强制重新创建
-                self.api_key = None
-                self.api_secret = None
-                self.passphrase = None
-                self.api_credentials = None
-            elif signature_type == 0 and not private_key:
-                print("[!] 警告: signature_type=0 (EOA) 但没有提供私钥")
-                print("[*] 切换到 signature_type=2 (GNOSIS_SAFE) 使用 API 凭证")
-                signature_type = 2
-                self.signature_type = 2
+            # 注意：signature_type 需要与钱包类型匹配
+            # - signature_type=0 (EOA): 标准钱包，私钥直接对应地址
+            # - signature_type=2 (GNOSIS_SAFE): Safe 钱包，需要设置 funder_address 为 Safe 地址
+            
+            # 不再自动切换签名类型 - 让用户自己控制
+            # 如果签名失败，用户需要检查配置是否正确
             
             # 添加签名类型（注意：0 是有效值，必须用 is not None 判断）
             if signature_type is not None:
@@ -504,7 +490,14 @@ class PolymarketClient:
                 client_args["funder"] = funder_address
 
             self.client = ClobClient(**client_args)
-            print(f"[OK] 客户端初始化成功（私有 API 模式, 签名类型: {signature_type})")
+            print(f"[OK] 客户端初始化成功（私有 API 模式, 签名类型: {signature_type}）")
+            
+            # 打印关键配置信息
+            print(f"[*] 配置确认:")
+            print(f"    - 签名类型: {signature_type} ({'EOA' if signature_type == 0 else 'GNOSIS_SAFE' if signature_type == 2 else 'POLY_PROXY'})")
+            print(f"    - 资金地址: {funder_address if funder_address else '未设置（将使用私钥地址）'}")
+            if self.client.signer:
+                print(f"    - 私钥地址: {self.client.signer.address()}")
             
             # 启动心跳管理器（保持会话活跃）
             self.heartbeat_manager = HeartbeatManager(self.client)
@@ -1473,6 +1466,11 @@ class PolymarketClient:
             if resp and isinstance(resp, dict):
                 raw_balance = resp.get("balance", 0)
                 print(f"[*] get_balance: 原始余额值 = {raw_balance}")
+                
+                # 如果 SDK 返回的余额为 0，尝试直接查询链上余额
+                if raw_balance == 0 or raw_balance == '0':
+                    print("[*] SDK 返回余额为 0，尝试直接查询链上余额...")
+                    return self._get_balance_from_chain()
             
             if resp is None:
                 print("[!] get_balance: 响应为 None")
@@ -1520,7 +1518,54 @@ class PolymarketClient:
             print(f"[!] get_balance: get_balance_allowance 失败: {e}")
             import traceback
             traceback.print_exc()
+            
+            # 失败时尝试直接查询链上余额
+            return self._get_balance_from_chain()
 
+        return 0.0
+    
+    def _get_balance_from_chain(self) -> float:
+        """直接从链上查询余额（通过 Polymarket API）"""
+        try:
+            import requests
+            
+            # 获取查询地址
+            address = self.funder_address
+            if not address and self.client and self.client.signer:
+                address = self.client.signer.address()
+            
+            if not address:
+                print("[!] 无法确定查询地址")
+                return 0.0
+            
+            print(f"[*] 正在查询地址 {address} 的链上余额...")
+            
+            # 使用 Polygon RPC 查询 USDC.e 余额
+            # USDC.e 合约地址: 0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174
+            url = "https://polygon-rpc.com"
+            payload = {
+                "jsonrpc": "2.0",
+                "method": "eth_call",
+                "params": [{
+                    "to": "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
+                    "data": f"0x70a08231000000000000000000000000{address[2:]}"
+                }, "latest"],
+                "id": 1
+            }
+            
+            response = requests.post(url, json=payload, timeout=10)
+            if response.status_code == 200:
+                result = response.json().get("result", "0x0")
+                # 将 hex 转换为十进制，再除以 10^6 (USDC 有 6 位小数)
+                balance_wei = int(result, 16)
+                balance = balance_wei / 1000000
+                print(f"[*] 链上余额查询成功: {balance} USDC")
+                return balance
+            else:
+                print(f"[!] 链上查询失败: {response.status_code}")
+        except Exception as e:
+            print(f"[!] 链上余额查询失败: {e}")
+        
         return 0.0
 
     def _get_balance_direct(self) -> float:
