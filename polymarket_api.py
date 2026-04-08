@@ -856,8 +856,10 @@ class PolymarketClient:
             return None
 
         try:
-            # 使用官方 SDK 创建或派生凭证
-            print("[*] 正在调用 create_or_derive_api_creds()...")
+            print(f"[*] 私钥长度: {len(self.private_key)}")
+            print(f"[*] 客户端状态: {self.client is not None}")
+            print(f"[*] 正在调用 create_or_derive_api_creds()...")
+            
             creds_obj = self.client.create_or_derive_api_creds()
             print(f"[*] 返回类型: {type(creds_obj)}")
             print(f"[*] 返回内容: {creds_obj}")
