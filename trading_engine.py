@@ -553,13 +553,6 @@ class TradingEngine:
             except Exception as e:
                 yes_orderbook = {}
 
-            # 提取买一卖一
-            bids = yes_orderbook.get("bids", [])
-            asks = yes_orderbook.get("asks", [])
-            best_bid = bids[0]["price"] if bids else 0
-            best_ask = asks[0]["price"] if asks else 0
-            spread = best_ask - best_bid if best_ask > best_bid else 0
-
             # 记录更新时间
             self.last_update_time = datetime.now().strftime("%H:%M:%S")
             self.last_update_duration = (time.time() - start_time) * 1000
@@ -572,10 +565,6 @@ class TradingEngine:
             return {
                 "yes_price": yes_price,
                 "no_price": no_price,
-                "best_bid": best_bid,
-                "best_ask": best_ask,
-                "spread": spread,
-                "orderbook": yes_orderbook,
             }
 
         except Exception as e:
