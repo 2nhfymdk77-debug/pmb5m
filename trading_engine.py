@@ -324,7 +324,13 @@ class TradingEngine:
             try:
                 print("请输入 (y/n/q): ", end="", flush=True)
                 sys.stdout.flush()
-                user_input = sys.stdin.readline().strip().lower()
+                # 使用更可靠的输入方式
+                try:
+                    user_input = input()
+                except EOFError:
+                    time.sleep(0.1)
+                    user_input = sys.stdin.readline()
+                user_input = user_input.strip().lower()
                 if not user_input:
                     print("  无效输入，请输入 y、n 或 q", flush=True)
                     continue
