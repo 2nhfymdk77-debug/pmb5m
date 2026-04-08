@@ -670,13 +670,13 @@ class PolymarketClient:
             return []
 
     def get_tradable_markets(self, limit: int = 100) -> List[Dict[str, Any]]:
-        """获取可交易市场（使用官方 Events API 获取活跃市场）"""
+        """获取可交易市场（使用 /markets 接口获取活跃市场）"""
         if not self.client:
             return []
         try:
             import requests
-            # 使用官方推荐的 /events 接口获取活跃事件
-            url = "https://gamma-api.polymarket.com/events"
+            # 使用 /markets 接口获取活跃市场
+            url = "https://gamma-api.polymarket.com/markets"
             params = {
                 "active": "true",
                 "closed": "false",
@@ -688,16 +688,18 @@ class PolymarketClient:
             }
             response = requests.get(url, params=params, headers=headers, timeout=10)
             if response.status_code == 200:
-                events = response.json()
-                print(f"[*] 获取到 {len(events)} 个活跃事件")
-                # 打印前5个事件用于调试
-                for i, e in enumerate(events[:5]):
-                    print(f"    [{i+1}] slug: {e.get('slug', 'N/A')[:60]}")
-                    print(f"        question: {e.get('question', 'N/A')[:40]}")
-                # 返回事件列表（事件包含关联市场）
-                return events
+                markets = response.json()
+                print(f"[*] 获取到 {len(markets)} 个活跃市场")
+                # 打印前10个市场用于调试
+                for i, m in enumerate(markets[:10]):
+                    slug = m.get('slug', 'N/A')
+                    question = m.get('question', 'N/A')
+                    print(f"    [{i+1}] {slug[:50]}")
+                    if question and question != 'N/A':
+                        print(f"        Q: {question[:40]}")
+                return markets
             else:
-                print(f"获取活跃事件失败: {response.status_code} - {response.text[:200]}")
+                print(f"获取活跃市场失败: {response.status_code} - {response.text[:200]}")
                 return []
         except Exception as e:
             print(f"获取可交易市场失败: {e}")

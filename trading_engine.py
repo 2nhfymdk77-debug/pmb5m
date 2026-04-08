@@ -543,50 +543,46 @@ class TradingEngine:
         print("[诊断] >>> 进入 fetch_real_market_data")
         
         try:
-            # 步骤1: 获取活跃事件列表（官方推荐方式）
-            print("[诊断] 步骤1: 获取活跃事件列表...")
-            events = self.client.get_tradable_markets(limit=100)
+            # 步骤1: 获取活跃市场列表
+            print("[诊断] 步骤1: 获取活跃市场列表...")
+            markets = self.client.get_tradable_markets(limit=100)
             
-            if not events:
-                print("[错误] 无法获取事件列表")
+            if not markets:
+                print("[错误] 无法获取市场列表")
                 return None
             
-            print(f"[诊断] 获取到 {len(events)} 个事件")
+            print(f"[诊断] 获取到 {len(markets)} 个市场")
             
-            # 步骤2: 过滤 BTC 5分钟事件
-            print("[诊断] 步骤2: 过滤 BTC 5分钟事件...")
-            btc_event = None
-            for e in events:
-                slug = (e.get('slug', '') or '').lower()
-                title = (e.get('event_title', '') or '').lower()
-                question = (e.get('question', '') or '').lower()
+            # 步骤2: 过滤 BTC 5分钟市场
+            print("[诊断] 步骤2: 过滤 BTC 5分钟市场...")
+            btc_market = None
+            for m in markets:
+                slug = (m.get('slug', '') or '').lower()
+                title = (m.get('event_title', '') or '').lower()
+                question = (m.get('question', '') or '').lower()
                 
                 # 匹配 BTC 5分钟格式
                 is_btc = 'btc' in slug or 'bitcoin' in slug or 'btc' in title or 'bitcoin' in title
                 is_5min = '5m' in slug or '5 min' in slug or '5min' in slug or 'updown' in slug
                 
                 if is_btc and is_5min:
-                    btc_event = e
-                    print(f"[诊断] 找到 BTC 事件: {e.get('slug', '')[:60]}")
-                    print(f"[诊断]   question: {e.get('question', '')[:50]}")
+                    btc_market = m
+                    print(f"[诊断] 找到 BTC 市场: {m.get('slug', '')[:60]}")
+                    print(f"[诊断]   question: {m.get('question', '')[:50]}")
                     break
             
-            if not btc_event:
-                print("[错误] 没有找到 BTC 5分钟事件")
+            if not btc_market:
+                print("[错误] 没有找到 BTC 5分钟市场")
                 return None
             
-            # 步骤3: 通过事件slug获取关联的市场详情
-            event_slug = btc_event.get("slug", "")
-            print(f"[诊断] 步骤3: 通过事件slug获取市场: {event_slug}")
+            # 步骤3: 获取市场详情
+            market_slug = btc_market.get("slug", "")
+            print(f"[诊断] 步骤3: 获取市场详情: {market_slug}")
             
-            market = self.client.get_market_by_event_slug(event_slug)
-            if not market:
-                print("[错误] 无法获取市场详情")
-                return None
-            
-            current_market_id = market.get("condition_id", "")
-            current_slug = market.get("slug", "")
-            current_question = market.get("question", "")
+            # 直接使用 btc_market 的数据，因为它已经包含完整信息
+            current_market_id = btc_market.get("condition_id", "")
+            current_slug = btc_market.get("slug", "")
+            current_question = btc_market.get("question", "")
             
             print(f"[诊断] 步骤4: 选择市场")
             print(f"  condition_id: {current_market_id[:30] if current_market_id else 'None'}...")
