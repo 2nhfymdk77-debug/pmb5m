@@ -7,6 +7,7 @@ import argparse
 
 from config import TradingConfig
 from trading_engine import TradingEngine
+from polymarket_api import PolymarketClient
 
 
 def print_banner():
@@ -215,17 +216,8 @@ def run_interactive_mode(config: TradingConfig) -> None:
             modify_parameters(config)
 
         elif choice == "3":
-            # 配置API - 动态创建 client 以支持清除凭证
-            from polymarket_api import PolymarketClient
-            temp_client = PolymarketClient(
-                private_key=config.private_key,
-                api_key=config.api_key,
-                api_secret=config.api_secret,
-                passphrase=config.passphrase,
-                signature_type=config.signature_type,
-                funder_address=config.funder_address,
-            )
-            configure_api(config, temp_client)
+            # 配置API
+            configure_api(config)
 
         elif choice == "4":
             # 查看历史（需要先创建引擎）
