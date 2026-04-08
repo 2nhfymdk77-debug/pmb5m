@@ -1226,6 +1226,18 @@ class TradingEngine:
         # 平仓
         self.close_position(position_type, position_size, entry_price, exit_price, exit_reason)
 
+        # 结算后重新同步真实余额（止损/止盈是实时结算，TIMEOUT需要等事件结算）
+        if exit_reason in ["STOP_LOSS", "TAKE_PROFIT"]:
+            # 止损止盈是实时结算，延迟1秒后同步
+            time.sleep(1)
+            try:
+                real_balance = self.client.get_balance()
+                if real_balance is not None and real_balance >= 0:
+                    self.balance = real_balance
+                    self.logger.info(f"[同步] 真实余额已更新: ${self.balance:.2f}")
+            except Exception as e:
+                self.logger.error(f"[同步] 同步余额失败: {e}")
+
     def _cancel_stop_take_orders(self) -> None:
         """取消止损止盈订单"""
         if self.stop_loss_order:
