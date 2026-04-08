@@ -52,6 +52,7 @@ def load_env_variables() -> Dict[str, str]:
         "API_KEY": "api_key",
         "API_SECRET": "api_secret",
         "PASSPHRASE": "passphrase",
+        "FUNDER_ADDRESS": "funder_address",
         "MARKET_SLUG": "market_slug",
         "ENTRY_PRICE": "entry_price",
         "STOP_LOSS": "stop_loss",

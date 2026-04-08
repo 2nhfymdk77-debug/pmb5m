@@ -13,6 +13,7 @@ if env_path.exists():
     print(f"[OK] 已加载 .env 文件")
 else:
     print(f"[!] 未找到 .env 文件: {env_path}")
+    print(f"[*] 正在创建默认 .env 文件...")
     sys.exit(1)
 
 print("\n" + "=" * 60)
@@ -21,34 +22,37 @@ print("=" * 60)
 
 # 检查必要的环境变量
 required_vars = [
-    "PRIVATE_KEY",
-    "API_KEY",
-    "API_SECRET",
-    "PASSPHRASE",
+    ("PRIVATE_KEY", "私钥"),
+    ("SIGNATURE_TYPE", "签名类型"),
 ]
 
-for var in required_vars:
+for var, desc in required_vars:
     value = os.getenv(var, "")
-    if value:
-        if var == "PRIVATE_KEY":
-            print(f"[OK] {var}: 已设置 (长度: {len(value)})")
-        else:
-            print(f"[OK] {var}: 已设置 (长度: {len(value)})")
+    if var == "PRIVATE_KEY":
+        print(f"[{'OK' if value else 'X'}] {desc}: {'已设置' if value else '未设置'}")
     else:
-        print(f"[X] {var}: 未设置")
+        print(f"[{'OK' if value else '!'}] {desc}: {value if value else '未设置'}")
 
-# 可选变量
-optional_vars = ["SIGNATURE_TYPE", "FUNDER_ADDRESS", "CHAIN_ID"]
-for var in optional_vars:
+# 检查可选变量
+optional_vars = [
+    ("FUNDER_ADDRESS", "资金地址"),
+    ("API_KEY", "API Key"),
+    ("API_SECRET", "API Secret"),
+    ("PASSPHRASE", "Passphrase"),
+]
+for var, desc in optional_vars:
     value = os.getenv(var, "")
-    print(f"[*] {var}: {value if value else '未设置'}")
+    print(f"[*] {desc}: {value if value else '未设置'}")
 
 # 检查私钥对应的地址
 print("\n" + "=" * 60)
-print("私钥检查")
+print("钱包检查")
 print("=" * 60)
 
 private_key = os.getenv("PRIVATE_KEY", "")
+signature_type = int(os.getenv("SIGNATURE_TYPE", "0"))
+funder_address = os.getenv("FUNDER_ADDRESS", "")
+
 if private_key:
     try:
         from eth_account import Account
@@ -58,84 +62,31 @@ if private_key:
             private_key = private_key[2:]
         
         acct = Account.from_key(private_key)
-        print(f"[OK] 私钥对应的地址: {acct.address}")
+        print(f"[OK] 签名密钥地址: {acct.address}")
         
-        # 检查 funder_address 是否匹配
-        funder = os.getenv("FUNDER_ADDRESS", "")
-        if funder:
-            if funder.lower() == acct.address.lower():
-                print(f"[OK] FUNDER_ADDRESS 与私钥地址匹配")
+        # 检查签名类型
+        type_names = {0: "EOA (普通钱包)", 1: "POLY_PROXY", 2: "GNOSIS_SAFE (Safe 多签钱包)"}
+        print(f"[*] 签名类型: {signature_type} - {type_names.get(signature_type, '未知')}")
+        
+        if signature_type == 2:
+            print(f"[*] 资金地址: {funder_address if funder_address else '未设置'}")
+            if not funder_address:
+                print("\n[!!!] 错误: Safe 钱包必须设置 FUNDER_ADDRESS!")
+                print("     请在 .env 中设置: FUNDER_ADDRESS=0x你的Safe钱包地址")
+            elif funder_address.lower() == acct.address.lower():
+                print("\n[!] 警告: 资金地址与签名密钥地址相同!")
+                print("    Safe 钱包的资金地址应该与签名密钥地址不同")
             else:
-                print(f"[!] FUNDER_ADDRESS ({funder}) 与私钥地址 ({acct.address}) 不匹配!")
-        else:
-            print(f"[*] FUNDER_ADDRESS 未设置，将使用私钥地址")
+                print("\n[OK] Safe 钱包配置正确")
+                print(f"    签名密钥: {acct.address}")
+                print(f"    资金地址: {funder_address}")
+        elif signature_type == 0:
+            print(f"[*] 普通钱包模式，余额地址: {acct.address}")
             
     except Exception as e:
         print(f"[X] 私钥解析失败: {e}")
 else:
-    print("[X] PRIVATE_KEY 未设置")
-
-# 查询链上余额
-print("\n" + "=" * 60)
-print("链上余额检查")
-print("=" * 60)
-
-if private_key:
-    try:
-        import requests
-        
-        # 获取查询地址
-        address = os.getenv("FUNDER_ADDRESS", "")
-        if not address:
-            from eth_account import Account
-            if private_key.startswith("0x"):
-                private_key_clean = private_key[2:]
-            else:
-                private_key_clean = private_key
-            acct = Account.from_key(private_key_clean)
-            address = acct.address
-        
-        print(f"[*] 查询地址: {address}")
-        
-        # 查询 USDC.e 余额 (Polygon)
-        # USDC.e 合约: 0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174
-        url = "https://polygon-rpc.com"
-        payload = {
-            "jsonrpc": "2.0",
-            "method": "eth_call",
-            "params": [{
-                "to": "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174",
-                "data": f"0x70a08231000000000000000000000000{address[2:]}"
-            }, "latest"],
-            "id": 1
-        }
-        
-        response = requests.post(url, json=payload, timeout=10)
-        if response.status_code == 200:
-            result = response.json().get("result", "0x0")
-            balance_wei = int(result, 16)
-            balance_usdc = balance_wei / 1000000
-            print(f"[OK] USDC.e 余额 (Polygon): {balance_usdc:.6f} USDC")
-        else:
-            print(f"[X] 查询失败: {response.status_code}")
-            
-        # 查询 MATIC 余额
-        payload_matic = {
-            "jsonrpc": "2.0",
-            "method": "eth_getBalance",
-            "params": [address, "latest"],
-            "id": 1
-        }
-        
-        response = requests.post(url, json=payload_matic, timeout=10)
-        if response.status_code == 200:
-            result = response.json().get("result", "0x0")
-            matic_wei = int(result, 16)
-            matic = matic_wei / 1e18
-            print(f"[OK] MATIC 余额: {matic:.6f} MATIC")
-            
-    except Exception as e:
-        print(f"[X] 余额查询失败: {e}")
+    print("[X] 私钥未设置")
 
 # 测试 API 连接
 print("\n" + "=" * 60)
@@ -157,9 +108,15 @@ try:
     print("[OK] API 客户端初始化成功")
     
     # 获取余额
-    print("\n[*] 正在通过 SDK 获取余额...")
+    print("\n[*] 正在获取余额...")
     balance = client.get_balance()
-    print(f"[OK] SDK 余额: ${balance:.2f}")
+    print(f"[OK] 账户余额: ${balance:.2f}")
+    
+    # 健康检查
+    if client.health_check():
+        print("[OK] API 连接正常")
+    else:
+        print("[!] API 连接异常")
     
 except Exception as e:
     print(f"[X] API 连接失败: {e}")
