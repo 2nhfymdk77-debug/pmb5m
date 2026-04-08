@@ -518,7 +518,9 @@ class TradingEngine:
             try:
                 orderbooks = self.client.get_market_orderbook(self.config.market_id)
                 yes_orderbook = orderbooks.get("YES", {})
-            except Exception:
+                print(f"[*] 订单簿 YES: bids={yes_orderbook.get('bids', [])[:1]}, asks={yes_orderbook.get('asks', [])[:1]}")
+            except Exception as e:
+                print(f"[!] 获取订单簿失败: {e}")
                 yes_orderbook = {}
 
             # 提取买一卖一
@@ -526,6 +528,7 @@ class TradingEngine:
             asks = yes_orderbook.get("asks", [])
             best_bid = bids[0]["price"] if bids else 0
             best_ask = asks[0]["price"] if asks else 0
+            print(f"[*] 提取的买一卖一: bid={best_bid}, ask={best_ask}")
             spread = best_ask - best_bid if best_ask > best_bid else 0
 
             # 记录更新时间
