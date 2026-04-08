@@ -361,7 +361,7 @@ class PolymarketClient:
         api_secret: str = "",
         passphrase: str = "",
         chain_id: int = POLYGON,
-        signature_type: int = 2,  # GNOSIS_SAFE (最常见)
+        signature_type: int = 0,  # EOA (标准钱包)
         funder_address: str = "",
     ):
         """
@@ -1140,7 +1140,7 @@ class PolymarketClient:
                 chain_id=137,  # Polygon
                 key=self.private_key,
                 creds=self.api_credentials,  # 使用新创建的凭证
-                signature_type=2  # L2 签名
+                signature_type=self.signature_type  # 继承实例的签名类型
             )
             
             # 验证客户端是否正确初始化

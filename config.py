@@ -134,7 +134,7 @@ class TradingConfig:
     api_key: str = ""  # API 密钥（L2 身份验证）
     api_secret: str = ""  # API 密钥（L2 身份验证）
     passphrase: str = ""  # API 口令（L2 身份验证）
-    signature_type: int = 2  # 签名类型: 0=EOA, 1=POLY_PROXY, 2=GNOSIS_SAFE
+    signature_type: int = 0  # 签名类型: 0=EOA(普通钱包), 1=POLY_PROXY, 2=GNOSIS_SAFE
     funder_address: str = ""  # 资金地址（代理钱包地址，从 Polymarket.com 获取）
     chain_id: int = 137  # Polygon链ID
 
