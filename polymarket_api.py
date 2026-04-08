@@ -19,6 +19,29 @@ import threading
 import functools
 from typing import Callable, Any, Optional
 
+# ==================== 价格辅助函数 ====================
+
+def cents_to_float(cents: float) -> float:
+    """美分格式转小数格式
+    
+    75 -> 0.75
+    45 -> 0.45
+    """
+    if cents > 1:
+        return cents / 100.0
+    return cents
+
+def float_to_cents(price: float) -> float:
+    """小数格式转美分格式（用于下单）
+    
+    0.75 -> 75
+    0.45 -> 45
+    """
+    if price <= 1:
+        return price * 100.0
+    return price
+
+
 
 # === Utility Functions ===
 
@@ -616,13 +639,13 @@ class PolymarketClient:
         self, market_id: str
     ) -> Dict[str, float]:
         """
-        获取市场价格
+        获取市场价格（统一返回 0-1 小数格式）
 
         Args:
             market_id: 市场ID
 
         Returns:
-            {"YES": price, "NO": price}
+            {"YES": price, "NO": price}  # 价格范围 0.0 - 1.0
         """
         token_ids = self.get_token_ids(market_id)
         if not token_ids:
@@ -638,18 +661,29 @@ class PolymarketClient:
         try:
             midpoints = self.get_midpoints([yes_token_id, no_token_id])
             print(f"[*] get_midpoints 原始返回: {midpoints}")
-            print(f"[*] YES token_id: {yes_token_id[:20]}...")
-            print(f"[*] NO token_id: {no_token_id[:20]}...")
             
             if midpoints:
-                # 尝试直接用索引获取
-                yes_price = midpoints.get(yes_token_id, midpoints.get("0", midpoints.get(0)))
-                no_price = midpoints.get(no_token_id, midpoints.get("1", midpoints.get(1)))
+                # 直接用 token_id 作为 key 获取
+                yes_price = midpoints.get(yes_token_id)
+                no_price = midpoints.get(no_token_id)
+                
+                # 如果找不到，尝试用数值索引 0 和 1
+                if yes_price is None:
+                    yes_price = midpoints.get(0)
+                if no_price is None:
+                    no_price = midpoints.get(1)
+                
                 print(f"[*] 提取的价格: YES={yes_price}, NO={no_price}")
                 
-                if yes_price and no_price and float(yes_price) > 0 and float(no_price) > 0:
-                    print(f"价格(中间价): YES=${float(yes_price):.2f}, NO=${float(no_price):.2f}")
-                    return {"YES": float(yes_price), "NO": float(no_price)}
+                if yes_price is not None and no_price is not None:
+                    yes_price = float(yes_price)
+                    no_price = float(no_price)
+                    # 确保价格是 0-1 格式
+                    yes_price = cents_to_float(yes_price)
+                    no_price = cents_to_float(no_price)
+                    print(f"[*] 转换后价格: YES={yes_price}, NO={no_price}")
+                    print(f"价格(中间价): YES=${yes_price:.2f}, NO=${no_price:.2f}")
+                    return {"YES": yes_price, "NO": no_price}
         except Exception as e:
             print(f"get_midpoints 失败: {e}")
 
@@ -664,8 +698,20 @@ class PolymarketClient:
             no_asks = no_orderbook.get("asks", [])
             
             if yes_bids and yes_asks:
-                yes_price = (yes_bids[0].get("price", 0) + yes_asks[0].get("price", 0)) / 2
-                no_price = 100 - yes_price
+                # 买一和卖一的中间价
+                yes_price = (float(yes_bids[0].get("price", 0)) + float(yes_asks[0].get("price", 0))) / 2
+                # 确保是 0-1 格式
+                yes_price = cents_to_float(yes_price)
+                
+                # NO 价格应该从 NO 的订单簿获取
+                if no_bids and no_asks:
+                    no_price = (float(no_bids[0].get("price", 0)) + float(no_asks[0].get("price", 0))) / 2
+                    no_price = cents_to_float(no_price)
+                else:
+                    # 如果没有 NO 订单簿数据，使用 1 - YES
+                    no_price = 1.0 - yes_price
+                
+                print(f"[*] 订单簿价格: YES={yes_price}, NO={no_price}")
                 if yes_price > 0:
                     print(f"价格(订单簿): YES=${yes_price:.2f}, NO=${no_price:.2f}")
                     return {"YES": yes_price, "NO": no_price}
@@ -681,9 +727,9 @@ class PolymarketClient:
                 if isinstance(outcome_prices, list) and len(outcome_prices) >= 2:
                     yes_price = float(outcome_prices[0]) if outcome_prices[0] else 0
                     no_price = float(outcome_prices[1]) if outcome_prices[1] else 0
-                    # Gamma API 返回的是百分比（如 75 表示 75%）
-                    yes_price = yes_price / 100 if yes_price > 1 else yes_price
-                    no_price = no_price / 100 if no_price > 1 else no_price
+                    # Gamma API 返回的是百分比（如 75 表示 75%），转换为小数
+                    yes_price = cents_to_float(yes_price)
+                    no_price = cents_to_float(no_price)
                     if yes_price > 0:
                         print(f"价格(市场): YES=${yes_price:.2f}, NO=${no_price:.2f}")
                         return {"YES": yes_price, "NO": no_price}
@@ -692,12 +738,10 @@ class PolymarketClient:
                 for field in ["yes_price", "no_price", "price", "current_price"]:
                     if field in market and market[field]:
                         price = float(market[field])
-                        if price > 1:  # 如果大于1，可能是百分比
-                            price = price / 100
-                        # YES + NO = 1 (或 100)
+                        price = cents_to_float(price)
                         if price > 0:
                             yes_price = price
-                            no_price = 1 - price
+                            no_price = 1.0 - price
                             print(f"价格({field}): YES=${yes_price:.2f}, NO=${no_price:.2f}")
                             return {"YES": yes_price, "NO": no_price}
         except Exception as e:
@@ -1095,8 +1139,8 @@ class PolymarketClient:
             print("[*] get_balance: 尝试 get_balance_allowance...")
             
             # 绕过 SDK 的 bug：必须传入 BalanceAllowanceParams 对象，不能是 None
-            from py_clob_client.clob_types import BalanceAllowanceParams
-            params = BalanceAllowanceParams()
+            from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+            params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
             
             resp = self.client.get_balance_allowance(params)
             print(f"[*] get_balance: 响应类型 = {type(resp)}, 内容 = {resp}")
@@ -1120,8 +1164,8 @@ class PolymarketClient:
     def _get_balance_direct(self) -> float:
         """方法1: 直接获取余额（保留兼容性）"""
         try:
-            from py_clob_client.clob_types import BalanceAllowanceParams
-            params = BalanceAllowanceParams()
+            from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+            params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
             resp = self.client.get_balance_allowance(params)
             if resp and isinstance(resp, (dict, float, int)):
                 if isinstance(resp, dict):
