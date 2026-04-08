@@ -703,8 +703,10 @@ class TradingEngine:
         注意：这里没有做空操作，都是做多！
         """
         entry_price = self.config.entry_price
+        # 转换为 0-1 格式显示
+        entry_display = entry_price / 100.0 if entry_price > 1 else entry_price
 
-        print(f"[挂单] 挂双向限价单 @ ${entry_price:.2f}")
+        print(f"[挂单] 挂双向限价单 @ ${entry_display:.2f}")
 
         # 真实API模式：实际挂单
         if not self.yes_token_id or not self.no_token_id:
@@ -938,6 +940,7 @@ class TradingEngine:
         token = position["token"]
         entry_price = position["entry_price"]
         stop_loss_price = self.config.stop_loss
+        stop_loss_display = stop_loss_price / 100.0 if stop_loss_price > 1 else stop_loss_price
         
         # GTD 订单：5 分钟后自动过期（+60秒安全缓冲）
         duration = self.config.trade_cycle_minutes * 60
@@ -967,7 +970,7 @@ class TradingEngine:
                         "price": stop_loss_price,
                         "size": position_size,
                     }
-                    print(f"[止损] [OK] 止损单已挂: SELL {token} @ ${stop_loss_price:.2f}, 订单ID: {order_id[:20]}...")
+                    print(f"[止损] [OK] 止损单已挂: SELL {token} @ ${stop_loss_display:.2f}, 订单ID: {order_id[:20]}...")
                     return order_id
             
             print(f"[止损] [X] 止损单创建失败: {response.get('errorMsg', 'Unknown error') if response else 'Empty response'}")
@@ -998,6 +1001,7 @@ class TradingEngine:
         token = position["token"]
         entry_price = position["entry_price"]
         take_profit_price = self.config.take_profit
+        take_profit_display = take_profit_price / 100.0 if take_profit_price > 1 else take_profit_price
         
         # GTD 订单：5 分钟后自动过期（+60秒安全缓冲）
         duration = self.config.trade_cycle_minutes * 60
@@ -1024,7 +1028,7 @@ class TradingEngine:
                         "price": take_profit_price,
                         "size": position_size,
                     }
-                    print(f"[止盈] [OK] 止盈单已挂: SELL {token} @ ${take_profit_price:.2f}, 订单ID: {order_id[:20]}...")
+                    print(f"[止盈] [OK] 止盈单已挂: SELL {token} @ ${take_profit_display:.2f}, 订单ID: {order_id[:20]}...")
                     return order_id
             
             print(f"[止盈] [X] 止盈单创建失败: {response.get('errorMsg', 'Unknown error') if response else 'Empty response'}")
@@ -1064,9 +1068,11 @@ class TradingEngine:
         token_id = position.get("token_id")
 
         stop_loss_price = self.config.stop_loss
+        stop_loss_display = stop_loss_price / 100.0 if stop_loss_price > 1 else stop_loss_price
         take_profit_price = self.config.take_profit
+        take_profit_display = take_profit_price / 100.0 if take_profit_price > 1 else take_profit_price
 
-        print(f"[监控] 持仓: {token} @ ${entry_price:.2f} | 止损 ≤ ${stop_loss_price:.2f} | 止盈 ≥ ${take_profit_price:.2f}")
+        print(f"[监控] 持仓: {token} @ ${entry_price:.2f} | 止损 ≤ ${stop_loss_display:.2f} | 止盈 ≥ ${take_profit_display:.2f}")
 
         # 清除之前的止损止盈订单
         self.stop_loss_order = None
@@ -1180,11 +1186,18 @@ class TradingEngine:
         position_size = position["size"]
         token = position.get("token", "YES")
 
+        # 确保价格格式统一为 0-1 格式
+        def to_float_price(price: float) -> float:
+            """转换为 0-1 格式"""
+            if price > 1:
+                return price / 100.0
+            return price
+
         # 确定平仓价格
         if exit_reason == "STOP_LOSS":
-            exit_price = self.config.stop_loss
+            exit_price = to_float_price(self.config.stop_loss)
         elif exit_reason == "TAKE_PROFIT":
-            exit_price = self.config.take_profit
+            exit_price = to_float_price(self.config.take_profit)
         elif exit_reason == "TIMEOUT":
             # 到期结算：获取事件结果
             event_result = self.get_event_result()
@@ -1192,24 +1205,24 @@ class TradingEngine:
                 # 根据持仓代币和事件结果确定平仓价
                 if event_result == token:
                     # 持仓的代币获胜
-                    exit_price = 100
-                    self.logger.info(f"[OK] 事件结果: {event_result}，{token} 获胜，平仓价: 100")
+                    exit_price = 1.0  # 100% -> 1.0
+                    self.logger.info(f"[OK] 事件结果: {event_result}，{token} 获胜，平仓价: 1.0")
                 else:
                     # 持仓的代币失败
-                    exit_price = 0
-                    self.logger.info(f"[X] 事件结果: {event_result}，{token} 失败，平仓价: 0")
+                    exit_price = 0.0  # 0% -> 0.0
+                    self.logger.info(f"[X] 事件结果: {event_result}，{token} 失败，平仓价: 0.0")
             else:
                 # 无法获取事件结果，使用当前价格
                 try:
                     prices = self.client.get_market_prices(self.config.market_id)
                     if prices:
-                        exit_price = prices.get(token, entry_price)
+                        exit_price = to_float_price(prices.get(token, entry_price))
                     else:
                         exit_price = entry_price
                     self.logger.warning(f"[!] 无法获取事件结果，使用当前价格平仓: {exit_price:.2f}")
                 except Exception as e:
                     self.logger.error(f"获取市场价格失败: {e}")
-                    exit_price = 0
+                    exit_price = 0.0
         else:
             exit_price = entry_price  # 默认按开仓价平仓
 
