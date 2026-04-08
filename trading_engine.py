@@ -519,30 +519,48 @@ class TradingEngine:
                 if not markets:
                     raise TradingError("无法获取活跃市场列表")
                 
-                # 过滤比特币5分钟预测市场（只用于这个！）
-                bitcoin_keywords = ["bitcoin", "btc"]
-                time_keywords = ["5 min", "5min", "5-min", "5m", "5 second", "5sec"]
-                
-                bitcoin_markets = []
+                # 只用于5分钟比特币预测市场 - 严格匹配
+                # Polymarket 的 slug 通常格式: "bitcoin-5-min-btc..." 或 "btc-5-min..."
+                btc_5min_markets = []
                 for m in markets:
-                    question = m.get('question', '').lower()
                     slug = m.get('slug', '').lower()
-                    # 市场标题或slug包含比特币相关词
-                    has_btc = any(kw in question or kw in slug for kw in bitcoin_keywords)
-                    # 包含时间相关词（5分钟预测）
-                    has_time = any(kw in question or kw in slug for kw in time_keywords)
-                    if has_btc and has_time:
-                        bitcoin_markets.append(m)
+                    question = m.get('question', '').lower()
+                    
+                    # 严格匹配：slug 或 question 中同时包含比特币和5分钟相关词
+                    has_btc = 'bitcoin' in slug or 'btc' in slug or 'bitcoin' in question
+                    has_5min = ('5 min' in slug or '5min' in slug or '5-min' in slug or 
+                               '5 min' in question or '5min' in question or '5-min' in question or
+                               '5 minutes' in slug or '5 minutes' in question or
+                               'within 5' in question or 'in 5 min' in question or
+                               'next 5' in question)
+                    
+                    if has_btc and has_5min:
+                        btc_5min_markets.append(m)
                 
-                # 必须找到比特币5分钟市场，否则等待下一个周期
-                if bitcoin_markets:
-                    current_market = bitcoin_markets[0]
-                    print(f"[调试] 找到比特币5分钟市场: {current_market.get('question', 'Unknown')[:60]}")
+                # 必须找到5分钟比特币市场
+                if btc_5min_markets:
+                    current_market = btc_5min_markets[0]
+                    question = current_market.get('question', 'Unknown')
+                    print(f"[市场] 5分钟比特币预测: {question[:60]}...")
                 else:
-                    # 没有找到合适的市场，等待10秒后重试
-                    print(f"[警告] 未找到比特币5分钟市场，等待重试...")
-                    time.sleep(10)
-                    return None
+                    # 尝试宽松匹配：只包含 "bitcoin" 或 "btc"
+                    bitcoin_markets = [
+                        m for m in markets 
+                        if 'bitcoin' in m.get('slug', '').lower() or 'btc' in m.get('slug', '').lower()
+                        or 'bitcoin' in m.get('question', '').lower()
+                    ]
+                    
+                    if bitcoin_markets:
+                        # 找到比特币市场但不是5分钟的
+                        current_market = bitcoin_markets[0]
+                        question = current_market.get('question', 'Unknown')
+                        print(f"[跳过] 找到比特币市场但不是5分钟预测: {question[:50]}...")
+                        time.sleep(5)
+                        return None
+                    else:
+                        print(f"[等待] 等待5分钟比特币预测市场...")
+                        time.sleep(5)
+                        return None
                 
                 current_market_id = current_market.get("condition_id", "")
                 
