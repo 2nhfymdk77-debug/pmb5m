@@ -1143,13 +1143,31 @@ class PolymarketClient:
             params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
             
             resp = self.client.get_balance_allowance(params)
-            print(f"[*] get_balance: 响应类型 = {type(resp)}, 内容 = {resp}")
+            print(f"[*] get_balance: 响应类型 = {type(resp)}")
+            print(f"[*] get_balance: 原始内容 = {resp}")
+            
+            # 如果 balance 值很大，可能是以更小单位返回（如 wei）
+            # USDC 通常是 6 位小数，所以需要除以 10^6
+            if resp and isinstance(resp, dict):
+                raw_balance = resp.get("balance", 0)
+                print(f"[*] get_balance: 原始余额值 = {raw_balance}")
             
             if resp is None:
                 print("[!] get_balance: 响应为 None")
             elif isinstance(resp, dict):
-                balance = float(resp.get("balance", 0) or 0)
-                allowance = float(resp.get("allowance", 0) or 0)
+                raw_balance = resp.get("balance", 0) or 0
+                raw_allowance = resp.get("allowance", 0) or 0
+                
+                # 转换余额（如果值很大，可能是以微单位返回）
+                # USDC 通常是 6 位小数，如果余额 > 10000，除以 10^6
+                balance = float(raw_balance)
+                if balance > 10000:
+                    balance = balance / 1000000  # 转换为 USDC
+                
+                allowance = float(raw_allowance)
+                if allowance > 10000 and allowance != float("inf"):
+                    allowance = allowance / 1000000
+                
                 print(f"[*] get_balance: balance={balance}, allowance={allowance}")
                 return balance
             elif isinstance(resp, (float, int)):
