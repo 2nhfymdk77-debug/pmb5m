@@ -425,6 +425,10 @@ class PolymarketClient:
                 print("[!] 正在尝试自动创建 API 凭证...")
                 if self.create_api_credentials():
                     print("[OK] API 凭证创建成功")
+                    # 凭证创建成功后，重新初始化 CLOBClient（使用新凭证）
+                    print("[*] 重新初始化客户端，使用新凭证...")
+                    self._reinit_client_with_credentials()
+                    print("[OK] 客户端重新初始化完成")
                 else:
                     print("[!] API 凭证创建失败，将尝试使用提供的凭证")
 
@@ -844,6 +848,37 @@ class PolymarketClient:
         except Exception as e:
             print(f"[X] 保存凭证失败: {e}")
             return False
+    def _reinit_client_with_credentials(self) -> bool:
+        """使用新创建的凭证重新初始化 CLOBClient"""
+        try:
+            # 停止旧的心跳管理器
+            if self.heartbeat_manager:
+                self.heartbeat_manager.stop()
+                print("[*] 旧心跳管理器已停止")
+
+            # 重新初始化客户端（使用已创建的凭证）
+            self.client = ClobClient(
+                host="https://clob.polymarket.com",
+                chain_id=137,  # Polygon
+                key=self.private_key,
+                creds=self.api_credentials,  # 使用新创建的凭证
+                signature_type=2  # L2 签名
+            )
+            print("[OK] CLOBClient 重新初始化成功")
+
+            # 重新启动心跳管理器
+            self.heartbeat_manager = HeartbeatManager(self.client)
+            self.heartbeat_manager.start()
+            print("[OK] 新心跳管理器已启动")
+
+            return True
+
+        except Exception as e:
+            print(f"[X] 重新初始化客户端失败: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
 
     # ==================== 授权管理方法 ====================
     
