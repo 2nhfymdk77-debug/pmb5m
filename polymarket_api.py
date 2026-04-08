@@ -567,17 +567,21 @@ class PolymarketClient:
         if not self.client:
             return []
         try:
-            # 使用 Gamma API 获取活跃事件（包含 slug）
             import requests
+            # 使用 Gamma API 获取活跃事件（包含 slug）
             url = "https://gamma-api.polymarket.com/events"
             params = {
-                "active": "true",
-                "closed": "false",
+                "active": True,
+                "closed": False,
                 "limit": limit,
                 "order": "created_at",
                 "ascending": "false"
             }
-            response = requests.get(url, params=params, timeout=10)
+            headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            }
+            response = requests.get(url, params=params, headers=headers, timeout=10)
             if response.status_code == 200:
                 events = response.json()
                 # 事件包含 markets 数组，我们需要提取市场信息
@@ -592,7 +596,7 @@ class PolymarketClient:
                         result.append(market_copy)
                 return result
             else:
-                print(f"获取活跃事件失败: {response.status_code}")
+                print(f"获取活跃事件失败: {response.status_code} - {response.text[:200]}")
                 return []
         except Exception as e:
             print(f"获取可交易市场失败: {e}")
@@ -607,6 +611,7 @@ class PolymarketClient:
             # 首先获取加密标签
             tags_response = requests.get(
                 "https://gamma-api.polymarket.com/tags",
+                headers={"Accept": "application/json"},
                 timeout=10
             )
             crypto_tag_id = None
@@ -621,11 +626,11 @@ class PolymarketClient:
                         print(f"[*] 找到加密标签: {tag.get('name')}, ID: {crypto_tag_id}")
                         break
             
-            # 如果没找到，使用默认参数获取事件
+            # 使用默认参数获取事件
             url = "https://gamma-api.polymarket.com/events"
             params = {
-                "active": "true",
-                "closed": "false",
+                "active": True,
+                "closed": False,
                 "limit": limit,
                 "order": "created_at",
                 "ascending": "false"
@@ -634,10 +639,14 @@ class PolymarketClient:
             if crypto_tag_id:
                 params["tag_id"] = crypto_tag_id
             
-            response = requests.get(url, params=params, timeout=10)
+            headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            }
+            response = requests.get(url, params=params, headers=headers, timeout=10)
             if response.status_code == 200:
                 events = response.json()
-                print(f"[*] 获取到 {len(events)} 个加密事件")
+                print(f"[*] 获取到 {len(events)} 个事件")
                 
                 # 提取市场信息
                 result = []
