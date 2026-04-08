@@ -1303,16 +1303,25 @@ class PolymarketClient:
                     order_type=OrderType.FOK if order_type == "FOK" else OrderType.FAK,
                 )
             else:
-                # 限价单：使用官方推荐的 OrderArgs
-                args = OrderArgs(**order_args)
+                # 限价单：使用官方推荐的 OrderArgs（直接作为位置参数）
                 order_type_enum = OrderType.GTC
                 if order_type == "GTD":
                     order_type_enum = OrderType.GTD
                     
-                response = self.client.create_and_post_order(
-                    args=args,
-                    options=options,
+                # 构建 OrderArgs 对象
+                args = OrderArgs(
+                    token_id=token_id,
+                    side=side.upper(),
+                    size=size,
                     order_type=order_type_enum,
+                    price=api_price,
+                    tick_size=options.get("tick_size", "0.01"),
+                    neg_risk=options.get("neg_risk", False),
+                )
+                
+                response = self.client.create_and_post_order(
+                    args,
+                    options=options,
                 )
 
             # 解析响应
