@@ -574,7 +574,7 @@ class PolymarketClient:
                 "active": "true",
                 "closed": "false",
                 "limit": limit,
-                "order": "created_at",
+                "order": "start_date",
                 "ascending": "false"
             }
             headers = {
@@ -638,7 +638,7 @@ class PolymarketClient:
                 "active": "true",
                 "closed": "false",
                 "limit": limit,
-                "order": "created_at",
+                "order": "start_date",
                 "ascending": "false"
             }
             headers = {"Accept": "application/json"}
@@ -698,7 +698,7 @@ class PolymarketClient:
                 "active": "true",
                 "closed": "false",
                 "limit": limit,
-                "order": "created_at",
+                "order": "start_date",
                 "ascending": "false"
             }
             
