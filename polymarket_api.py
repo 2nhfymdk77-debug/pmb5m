@@ -380,6 +380,21 @@ class PolymarketClient:
             funder_address: 资金地址（代理钱包地址）
         """
         self.private_key = private_key
+        
+        # === 诊断信息 ===
+        from eth_account import Account
+        if private_key:
+            try:
+                acct = Account.from_key(private_key)
+                print(f"[诊断] 私钥长度: {len(private_key)} (应为66)")
+                print(f"[诊断] 私钥格式: 0x前缀={private_key.startswith('0x')}")
+                print(f"[诊断] 私钥对应地址: {acct.address}")
+                print(f"[诊断] 钱包地址匹配: {acct.address.lower() == funder_address.lower() if funder_address else '未设置'}")
+            except Exception as e:
+                print(f"[诊断] 私钥错误: {e}")
+        else:
+            print("[诊断] 私钥为空")
+        
         # 处理私钥格式：确保传给 SDK 时不带 0x 前缀（Ethereum 标准）
         self._raw_private_key = private_key
         if private_key and private_key.startswith("0x"):
@@ -436,6 +451,11 @@ class PolymarketClient:
             }
 
             # 准备 API 凭证（L2 身份验证）
+            print(f"[诊断] API凭证状态:")
+            print(f"  - api_key: {'已设置('+str(len(api_key))+'位)' if api_key else '空'}")
+            print(f"  - api_secret: {'已设置('+str(len(api_secret))+'位)' if api_secret else '空'}")
+            print(f"  - passphrase: {'已设置('+str(len(passphrase))+'位)' if passphrase else '空'}")
+            
             # 只有当凭证都是非空字符串时才使用
             if api_key and api_secret and passphrase:
                 # 验证凭证不是占位符或旧值
