@@ -640,14 +640,20 @@ class TradingEngine:
                         f.write(f"市场已切换: {current_market_id[:16]}...\n")
                         f.write(f"问题: {question[:50]}...\n")
                         
+                # 调试：确认 market_id 已设置
+                print(f"[诊断] fetch_market_data 中 market_id: {self.config.market_id[:20] if self.config.market_id else 'None'}...")
+                        
             except Exception as e:
                 self.error_handler.handle(e, "获取活跃市场", recoverable=True)
+                print(f"[诊断] 获取市场异常: {e}")
                 self.api_status = "error"
                 return None
 
             # 获取代币ID
             try:
+                print(f"[诊断] 调用 get_token_ids，market_id: {self.config.market_id[:20] if self.config.market_id else 'None'}...")
                 token_ids = self.client.get_token_ids(self.config.market_id)
+                print(f"[诊断] get_token_ids 返回: {type(token_ids)}")
 
                 # 验证 token_ids
                 if not token_ids or not isinstance(token_ids, dict):
@@ -664,6 +670,11 @@ class TradingEngine:
 
             self.yes_token_id = token_ids.get("YES")
             self.no_token_id = token_ids.get("NO")
+            
+            print(f"[诊断] token_ids 设置成功:")
+            print(f"  YES: {self.yes_token_id[:20] if self.yes_token_id else 'None'}...")
+            print(f"  NO: {self.no_token_id[:20] if self.no_token_id else 'None'}...")
+            print(f"[诊断] 当前 market_id: {self.config.market_id[:20] if self.config.market_id else 'None'}...")
 
             # 获取价格
             try:
