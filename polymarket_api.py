@@ -984,6 +984,8 @@ class PolymarketClient:
         try:
             print(f"[*] 私钥长度: {len(self.private_key)}")
             print(f"[*] 客户端状态: {self.client is not None}")
+            print(f"[*] 当前 signature_type: {self.signature_type}")
+            print(f"[*] 当前 funder_address: {self.funder_address}")
             print(f"[*] 正在调用 create_or_derive_api_creds()...")
             
             creds_obj = self.client.create_or_derive_api_creds()
@@ -1427,8 +1429,12 @@ class PolymarketClient:
             print(f"  - tick_size: {tick_size}")
             print(f"  - neg_risk: {neg_risk}")
             print(f"  - signature_type: {self.signature_type}")
-            print(f"  - client.creds: {self.client.creds is not None if self.client else 'client is None'}")
+            print(f"  - client.creds: {self.client.creds}")
+            if self.client.creds:
+                print(f"  - creds.api_key: {self.client.creds.api_key[:10]}...")
             print(f"  - client.signer: {self.client.signer if self.client else 'None'}")
+            if self.client and self.client.signer:
+                print(f"  - signer地址: {self.client.signer.address()}")
             
             # 限价单：使用官方推荐的 OrderArgs（直接作为位置参数）
             # OrderArgs 签名: (token_id, price, size, side, fee_rate_bps=0, nonce=0, expiration=0, taker='0x...')
