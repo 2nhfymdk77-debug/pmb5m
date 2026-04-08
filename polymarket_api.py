@@ -637,12 +637,19 @@ class PolymarketClient:
         # 方法1: 尝试使用 get_midpoints
         try:
             midpoints = self.get_midpoints([yes_token_id, no_token_id])
+            print(f"[*] get_midpoints 原始返回: {midpoints}")
+            print(f"[*] YES token_id: {yes_token_id[:20]}...")
+            print(f"[*] NO token_id: {no_token_id[:20]}...")
+            
             if midpoints:
-                yes_price = midpoints.get(yes_token_id, 0.0)
-                no_price = midpoints.get(no_token_id, 0.0)
-                if yes_price > 0 and no_price > 0:
-                    print(f"价格(中间价): YES=${yes_price:.2f}, NO=${no_price:.2f}")
-                    return {"YES": yes_price, "NO": no_price}
+                # 尝试直接用索引获取
+                yes_price = midpoints.get(yes_token_id, midpoints.get("0", midpoints.get(0)))
+                no_price = midpoints.get(no_token_id, midpoints.get("1", midpoints.get(1)))
+                print(f"[*] 提取的价格: YES={yes_price}, NO={no_price}")
+                
+                if yes_price and no_price and float(yes_price) > 0 and float(no_price) > 0:
+                    print(f"价格(中间价): YES=${float(yes_price):.2f}, NO=${float(no_price):.2f}")
+                    return {"YES": float(yes_price), "NO": float(no_price)}
         except Exception as e:
             print(f"get_midpoints 失败: {e}")
 
