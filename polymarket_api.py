@@ -426,22 +426,19 @@ class PolymarketClient:
             }
 
             # 准备 API 凭证（L2 身份验证）
+            # 只有当凭证都是非空字符串时才使用
             if api_key and api_secret and passphrase:
-                # 使用 ApiCreds 对象格式
-                self.api_credentials = ApiCreds(
-                    api_key=api_key,
-                    api_secret=api_secret,
-                    api_passphrase=passphrase
-                )
-                client_args["creds"] = self.api_credentials
-            elif self.api_credentials and isinstance(self.api_credentials, dict):
-                # 使用字典格式（从环境变量加载）
-                self.api_credentials = ApiCreds(
-                    api_key=self.api_credentials.get("key", self.api_credentials.get("apiKey", "")),
-                    api_secret=self.api_credentials.get("secret", self.api_credentials.get("api_secret", "")),
-                    api_passphrase=self.api_credentials.get("passphrase", self.api_credentials.get("api_passphrase", ""))
-                )
-                client_args["creds"] = self.api_credentials
+                # 验证凭证不是占位符或旧值
+                if len(api_key) > 10 and len(api_secret) > 10 and len(passphrase) > 5:
+                    self.api_credentials = ApiCreds(
+                        api_key=api_key,
+                        api_secret=api_secret,
+                        api_passphrase=passphrase
+                    )
+                    client_args["creds"] = self.api_credentials
+                    print("[*] 使用现有 API 凭证")
+                else:
+                    print("[!] 现有凭证无效，将尝试自动创建...")
 
             # 添加签名类型
             if signature_type:
