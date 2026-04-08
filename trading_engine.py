@@ -536,208 +536,109 @@ class TradingEngine:
         return self.fetch_real_market_data()
 
     def fetch_real_market_data(self) -> Optional[Dict[str, Any]]:
-        """获取真实市场数据（优化版：每个周期检查市场是否仍然活跃）"""
+        """获取真实市场数据（简化版）"""
+        import traceback
         start_time = time.time()
         
-        # 调试日志到文件
-        import os
-        debug_log = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug.log")
-        with open(debug_log, "a", encoding="utf-8") as f:
-            f.write(f"\n=== fetch_real_market_data ===\n")
-
+        print("[诊断] >>> 进入 fetch_real_market_data")
+        
         try:
-            # 获取最新活跃市场列表（专门获取BTC 5分钟市场）
-            print("[诊断] >>> 进入 fetch_real_market_data")
-            try:
-                # 计算正确的5分钟周期slug（美东时间）
-                from datetime import datetime, timezone, timedelta
-                
-                # 美东时区 (EDT in April = UTC-4)
-                edt = timezone(timedelta(hours=-4))
-                now_edt = datetime.now(edt)
-                
-                # 计算下一个5分钟周期的开始时间（向上取整）
-                # 例如: 2:58 -> 下一个周期从 3:00 开始
-                current_minute = now_edt.minute
-                current_second = now_edt.second
-                
-                # 计算需要加多少分钟到下一个5分钟边界
-                minutes_to_next = 5 - (current_minute % 5)
-                if current_second > 0:
-                    minutes_to_next = minutes_to_next
-                else:
-                    minutes_to_next = 0
-                
-                # 下一个周期开始时间
-                from datetime import timedelta
-                next_period_start = now_edt + timedelta(minutes=minutes_to_next)
-                next_period_start = next_period_start.replace(second=0, microsecond=0)
-                
-                # 转换为 Unix 时间戳
-                next_period_ts = int(next_period_start.timestamp())
-                
-                # 生成slug
-                current_slug = f"btc-updown-5m-{next_period_ts}"
-                
-                print(f"[*] 美东时间: {now_edt.strftime('%Y-%m-%d %H:%M:%S')}")
-                print(f"[*] 下一个5分钟周期: {next_period_start.strftime('%H:%M')} (时间戳: {next_period_ts})")
-                print(f"[*] 尝试获取BTC 5分钟市场: {current_slug}")
-                
-                market = self.client.get_market_by_slug(current_slug)
-                print(f"[诊断] get_market_by_slug 返回: {type(market)}, 是否有值: {bool(market)}")
-                if market:
-                    print(f"[OK] 找到市场: {market.get('question', '')[:50]}")
-                    markets = [market]
-                else:
-                    print("[*] 直接获取失败，从列表中搜索...")
-                    markets = self.client.get_btc_5min_markets(limit=10)
-                    print(f"[诊断] get_btc_5min_markets 返回: {len(markets)} 个市场")
-                    if not markets:
-                        markets = self.client.get_tradable_markets(limit=100)
-                        print(f"[诊断] get_tradable_markets 返回: {len(markets)} 个市场")
-                        # 从全部市场中过滤BTC 5分钟（更宽松匹配）
-                        btc_5min = []
-                        for m in markets:
-                            slug = (m.get('slug', '') or '').lower()
-                            title = (m.get('event_title', '') or '').lower()
-                            question = (m.get('question', '') or '').lower()
-                            # 匹配各种BTC 5分钟格式
-                            if ('btc' in slug or 'btc' in title or 'bitcoin' in slug or 'bitcoin' in title):
-                                if ('5m' in slug or '5 min' in title or '5 min' in question or 'updown' in slug):
-                                    btc_5min.append(m)
-                        markets = btc_5min
-                        print(f"[诊断] BTC 5分钟过滤后: {len(markets)} 个市场")
-                
-                if not markets:
-                    print("[错误] 无法获取活跃市场列表")
-                    raise TradingError("无法获取活跃市场列表")
-                
-                print(f"[诊断] 找到 {len(markets)} 个市场，使用第一个")
-                
-                # 调试：打印前3个市场
-                if len(markets) > 0:
-                    print(f"[调试] 前3个市场:")
-                    for i, m in enumerate(markets[:3]):
-                        print(f"    {i+1}. slug: {m.get('slug', '')[:60]}")
-                        print(f"       question: {str(m.get('question', ''))[:50]}")
-                
-                # 必须找到5分钟比特币市场
-                if markets:
-                    current_market = markets[0]
-                    question = current_market.get('question', 'Unknown')
-                    slug = current_market.get('slug', '')
-                    print(f"[市场] 5分钟BTC预测: {question[:60]}...")
-                    print(f"[调试] slug: {slug}")
-                else:
-                    print(f"[等待] 等待5分钟BTC预测市场...")
-                    time.sleep(5)
-                    return None
-                
-                current_market_id = current_market.get("condition_id", "")
-                
-                # 检查市场是否变化或不再活跃
-                market_changed = (self.config.market_id != current_market_id)
-                
-                if market_changed or not self.config.market_id:
-                    # 市场已变化或未设置，获取新市场
-                    self.config.market_id = current_market_id
-                    self.current_event_id = current_market_id  # 重置事件ID
-                    self.has_traded_in_event = False  # 重置交易状态
-                    self.event_start_time = datetime.now()
-                    question = current_market.get('question', 'Unknown')
-                    print(f"[切换] 新事件: {question[:50]}...")
-                    
-                    # 调试日志
-                    with open(debug_log, "a", encoding="utf-8") as f:
-                        f.write(f"市场已切换: {current_market_id[:16]}...\n")
-                        f.write(f"问题: {question[:50]}...\n")
-                        
-                # 调试：确认 market_id 已设置
-                print(f"[诊断] fetch_market_data 中 market_id: {self.config.market_id[:20] if self.config.market_id else 'None'}...")
-                        
-            except Exception as e:
-                self.error_handler.handle(e, "获取活跃市场", recoverable=True)
-                print(f"[诊断] 获取市场异常: {e}")
-                self.api_status = "error"
+            # 步骤1: 获取活跃市场列表
+            print("[诊断] 步骤1: 获取活跃市场列表...")
+            markets = self.client.get_tradable_markets(limit=100)
+            
+            if not markets:
+                print("[错误] 无法获取市场列表")
                 return None
-
-            # 获取代币ID
-            try:
-                print(f"[诊断] 调用 get_token_ids，market_id: {self.config.market_id[:20] if self.config.market_id else 'None'}...")
-                token_ids = self.client.get_token_ids(self.config.market_id)
-                print(f"[诊断] get_token_ids 返回: {type(token_ids)}")
-
-                # 验证 token_ids
-                if not token_ids or not isinstance(token_ids, dict):
-                    raise TradingError(f"代币ID格式错误")
-                if "YES" not in token_ids or "NO" not in token_ids:
-                    raise TradingError(f"代币ID缺少 YES/NO 字段")
-                if not token_ids.get("YES") or not token_ids.get("NO"):
-                    raise TradingError(f"代币ID字段为空")
-
-            except Exception as e:
-                self.error_handler.handle(e, "获取代币ID", recoverable=True)
-                self.api_status = "error"
+            
+            print(f"[诊断] 获取到 {len(markets)} 个市场")
+            
+            # 步骤2: 过滤 BTC 5分钟市场
+            print("[诊断] 步骤2: 过滤 BTC 5分钟市场...")
+            btc_market = None
+            for m in markets:
+                slug = (m.get('slug', '') or '').lower()
+                title = (m.get('event_title', '') or '').lower()
+                question = (m.get('question', '') or '').lower()
+                
+                # 匹配 BTC 5分钟格式
+                is_btc = 'btc' in slug or 'bitcoin' in slug or 'btc' in title or 'bitcoin' in title
+                is_5min = '5m' in slug or '5 min' in slug or '5min' in slug or 'updown' in slug
+                
+                if is_btc and is_5min:
+                    btc_market = m
+                    print(f"[诊断] 找到 BTC 市场: {m.get('slug', '')[:60]}")
+                    print(f"[诊断]   question: {m.get('question', '')[:50]}")
+                    break
+            
+            if not btc_market:
+                print("[错误] 没有找到 BTC 5分钟市场")
                 return None
-
+            
+            # 步骤3: 选择市场
+            current_market_id = btc_market.get("condition_id", "")
+            current_slug = btc_market.get("slug", "")
+            current_question = btc_market.get("question", "")
+            
+            print(f"[诊断] 步骤3: 选择市场")
+            print(f"  market_id: {current_market_id[:30] if current_market_id else 'None'}...")
+            print(f"  slug: {current_slug}")
+            print(f"  question: {current_question[:50]}")
+            
+            if not current_market_id:
+                print("[错误] 市场 condition_id 为空")
+                return None
+            
+            # 步骤4: 设置 market_id（关键步骤）
+            print(f"[诊断] 步骤4: 设置 self.config.market_id")
+            self.config.market_id = current_market_id
+            self.current_event_id = current_market_id
+            self.has_traded_in_event = False
+            self.event_start_time = datetime.now()
+            
+            print(f"[诊断] 确认 market_id 已设置: {self.config.market_id[:30] if self.config.market_id else 'None'}...")
+            
+            # 步骤5: 获取 token IDs
+            print(f"[诊断] 步骤5: 获取 token IDs...")
+            token_ids = self.client.get_token_ids(current_market_id)
+            print(f"[诊断] token_ids 返回: {token_ids}")
+            
+            if not token_ids or "YES" not in token_ids or "NO" not in token_ids:
+                print(f"[错误] token_ids 格式错误: {token_ids}")
+                return None
+            
             self.yes_token_id = token_ids.get("YES")
             self.no_token_id = token_ids.get("NO")
+            print(f"[诊断] YES token: {self.yes_token_id[:20]}...")
+            print(f"[诊断] NO token: {self.no_token_id[:20]}...")
             
-            print(f"[诊断] token_ids 设置成功:")
-            print(f"  YES: {self.yes_token_id[:20] if self.yes_token_id else 'None'}...")
-            print(f"  NO: {self.no_token_id[:20] if self.no_token_id else 'None'}...")
-            print(f"[诊断] 当前 market_id: {self.config.market_id[:20] if self.config.market_id else 'None'}...")
-
-            # 获取价格
-            try:
-                prices = self.client.get_market_prices(self.config.market_id)
-                if not prices or prices.get("YES", 0) == 0:
-                    raise TradingError("价格数据无效")
-            except Exception as e:
-                self.error_handler.handle(e, "获取市场价格", recoverable=True)
-                self.api_status = "error"
+            # 步骤6: 获取价格
+            print(f"[诊断] 步骤6: 获取价格...")
+            prices = self.client.get_market_prices(current_market_id)
+            print(f"[诊断] 价格: {prices}")
+            
+            if not prices:
+                print(f"[错误] 价格获取失败")
                 return None
-
+            
             yes_price = prices.get("YES", 0)
             no_price = prices.get("NO", 0)
-
-            # 获取市场详情用于调试
-            try:
-                market_info = self.client.get_market_by_id(self.config.market_id)
-                if market_info:
-                    print(f"\n[诊断] 正在交易的市场:")
-                    print(f"  - question: {market_info.get('question', '')[:60]}")
-                    print(f"  - slug: {market_info.get('slug', '')}")
-                    print(f"  - condition_id: {self.config.market_id[:20]}...")
-                    print(f"  - YES token: {self.yes_token_id[:20]}...")
-                    print(f"  - NO token: {self.no_token_id[:20]}...")
-            except:
-                pass
-
-            # 获取订单簿（失败不影响主流程）
-            try:
-                orderbooks = self.client.get_market_orderbook(self.config.market_id)
-                yes_orderbook = orderbooks.get("YES", {})
-            except Exception as e:
-                yes_orderbook = {}
-
+            
             # 记录更新时间
             self.last_update_time = datetime.now().strftime("%H:%M:%S")
             self.last_update_duration = (time.time() - start_time) * 1000
-            # 市场数据获取成功，API 状态设为 connected
             self.api_status = "connected"
-
-            # 单行动态输出（只显示 YES/NO 价格）
-            print(f"\r[数据] YES ${yes_price:.2f} | NO ${no_price:.2f} | 耗时 {self.last_update_duration:.0f}ms    ", end="", flush=True)
-
+            
+            print(f"[OK] 市场数据获取成功: YES ${yes_price:.2f} | NO ${no_price:.2f}")
+            
             return {
                 "yes_price": yes_price,
                 "no_price": no_price,
             }
-
+            
         except Exception as e:
-            self.error_handler.handle(e, "获取市场数据", recoverable=True)
-            print(f"[诊断] 获取市场数据异常: {e}")
+            print(f"[错误] 获取市场数据异常: {e}")
+            traceback.print_exc()
             self.api_status = "error"
             return None
 
