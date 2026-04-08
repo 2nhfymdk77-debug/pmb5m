@@ -185,9 +185,18 @@ class ModernFormatter:
         return f"{Colors.INFO}{text}{Colors.RESET}"
 
     @staticmethod
-    def format_price(price_cents: float) -> str:
-        """格式化价格（美分转美元）"""
-        return f"${price_cents / 100:.2f}"
+    def format_price(price: float) -> str:
+        """格式化价格（自动检测格式）
+        
+        如果输入 > 1，当作美分处理（除以100）
+        如果输入 <= 1，当作小数处理（直接显示）
+        """
+        if price > 1:
+            # 美分格式，如 75 -> $0.75
+            return f"${price / 100:.2f}"
+        else:
+            # 小数格式，如 0.75 -> $0.75
+            return f"${price:.2f}"
 
     @staticmethod
     def format_balance(balance_usd: float) -> str:
