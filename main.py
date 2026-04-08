@@ -32,9 +32,13 @@ def print_config(config: TradingConfig):
     print(f"  模式: 真实交易")
     print(f"  初始余额: ${config.initial_balance}")
     print(f"  初始开仓: ${config.initial_position}")
-    print(f"  开仓价格: ${config.entry_price}")
-    print(f"  止损价格: ${config.stop_loss}")
-    print(f"  止盈价格: ${config.take_profit}")
+    # 转换价格为 0-1 格式显示
+    entry_display = config.entry_price / 100.0 if config.entry_price > 1 else config.entry_price
+    stop_loss_display = config.stop_loss / 100.0 if config.stop_loss > 1 else config.stop_loss
+    take_profit_display = config.take_profit / 100.0 if config.take_profit > 1 else config.take_profit
+    print(f"  开仓价格: ${entry_display:.2f}")
+    print(f"  止损价格: ${stop_loss_display:.2f}")
+    print(f"  止盈价格: ${take_profit_display:.2f}")
     print(f"  交易周期: {config.trade_cycle_minutes} 分钟")
     print(f"\n  身份验证配置:")
     if config.private_key:

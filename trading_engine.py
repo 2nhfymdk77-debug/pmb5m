@@ -293,14 +293,19 @@ class TradingEngine:
             True: 用户取消，应该跳过挂单
             False: 用户确认，应该继续挂单
         """
+        # 转换配置价格为 0-1 格式显示
+        entry_display = self.config.entry_price / 100.0 if self.config.entry_price > 1 else self.config.entry_price
+        stop_loss_display = self.config.stop_loss / 100.0 if self.config.stop_loss > 1 else self.config.stop_loss
+        take_profit_display = self.config.take_profit / 100.0 if self.config.take_profit > 1 else self.config.take_profit
+        
         print("\n" + "=" * 60)
         print("[!]  首次下单确认  [!]")
         print("=" * 60)
         print(f"  当前余额:     ${self.balance:.2f}")
         print(f"  开仓金额:     ${position_size:.2f}")
-        print(f"  开仓价格:     ${self.config.entry_price:.2f}")
-        print(f"  止损价格:     ${self.config.stop_loss:.2f}")
-        print(f"  止盈价格:     ${self.config.take_profit:.2f}")
+        print(f"  开仓价格:     ${entry_display:.2f}")
+        print(f"  止损价格:     ${stop_loss_display:.2f}")
+        print(f"  止盈价格:     ${take_profit_display:.2f}")
         print(f"  YES 价格:     ${market_data.get('yes_price', 0):.2f}")
         print(f"  NO 价格:      ${market_data.get('no_price', 0):.2f}")
         print("=" * 60)
