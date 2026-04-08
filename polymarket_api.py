@@ -916,54 +916,51 @@ class PolymarketClient:
         """保存 API 凭证到 .env 文件"""
         try:
             env_path = Path.cwd() / ".env"
-            if not env_path.exists():
-                print("[X] .env 文件不存在，跳过保存凭证")
-                return False
-
-            # 读取现有 .env 文件
-            with open(env_path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-
-            # 凭证键名映射（credentials 使用 key, secret, passphrase）
-            cred_mapping = {
-                "API_KEY=": credentials.get("key", ""),
-                "API_SECRET=": credentials.get("secret", ""),
-                "PASSPHRASE=": credentials.get("passphrase", ""),
-            }
             
-            # 检查是否需要添加新凭证行
-            has_api_key = any(line.startswith("API_KEY=") for line in lines)
-            has_api_secret = any(line.startswith("API_SECRET=") for line in lines)
-            has_passphrase = any(line.startswith("PASSPHRASE=") for line in lines)
-
+            # 读取现有 .env 内容（如果存在）
+            existing_lines = []
+            if env_path.exists():
+                with open(env_path, 'r', encoding='utf-8') as f:
+                    existing_lines = f.readlines()
+            
             # 更新或添加凭证
-            new_lines = []
-            for line in lines:
-                if line.startswith("API_KEY="):
-                    new_lines.append(f"API_KEY={cred_mapping['API_KEY=']}\n")
-                    has_api_key = False  # 已处理
-                elif line.startswith("API_SECRET="):
-                    new_lines.append(f"API_SECRET={cred_mapping['API_SECRET=']}\n")
-                    has_api_secret = False  # 已处理
-                elif line.startswith("PASSPHRASE="):
-                    new_lines.append(f"PASSPHRASE={cred_mapping['PASSPHRASE=']}\n")
-                    has_passphrase = False  # 已处理
-                else:
-                    new_lines.append(line)
+            lines_to_write = []
+            api_key_line = f"API_KEY={credentials.get('key', '')}\n"
+            api_secret_line = f"API_SECRET={credentials.get('secret', '')}\n"
+            passphrase_line = f"PASSPHRASE={credentials.get('passphrase', '')}\n"
             
-            # 如果凭证行不存在，添加到文件末尾
-            if has_api_key:
-                new_lines.append(f"API_KEY={cred_mapping['API_KEY=']}\n")
-            if has_api_secret:
-                new_lines.append(f"API_SECRET={cred_mapping['API_SECRET=']}\n")
-            if has_passphrase:
-                new_lines.append(f"PASSPHRASE={cred_mapping['PASSPHRASE=']}\n")
-
+            api_key_added = False
+            api_secret_added = False
+            passphrase_added = False
+            
+            for line in existing_lines:
+                if line.startswith("API_KEY="):
+                    lines_to_write.append(api_key_line)
+                    api_key_added = True
+                elif line.startswith("API_SECRET="):
+                    lines_to_write.append(api_secret_line)
+                    api_secret_added = True
+                elif line.startswith("PASSPHRASE="):
+                    lines_to_write.append(passphrase_line)
+                    passphrase_added = True
+                else:
+                    lines_to_write.append(line)
+            
+            # 添加缺失的凭证行
+            if not api_key_added:
+                lines_to_write.append(api_key_line)
+            if not api_secret_added:
+                lines_to_write.append(api_secret_line)
+            if not passphrase_added:
+                lines_to_write.append(passphrase_line)
+            
             # 写回文件
             with open(env_path, 'w', encoding='utf-8') as f:
-                f.writelines(new_lines)
+                f.writelines(lines_to_write)
 
             print(f"[OK] 凭证已保存到 .env 文件")
+            print(f"    API_KEY: {credentials.get('key', '')[:10]}...")
+            print(f"    API_SECRET: {credentials.get('secret', '')[:10]}...")
             return True
 
         except Exception as e:
