@@ -713,13 +713,16 @@ class TradingEngine:
             return
 
         try:
+            print(f"[挂单] 正在获取 YES market options...")
             # 获取市场的 tick_size 和 neg_risk（官方文档要求）
             yes_options = self.client.get_market_options(self.yes_token_id)
-            no_options = self.client.get_market_options(self.no_token_id)
-            
             print(f"[挂单] YES options: {yes_options}")
+            
+            print(f"[挂单] 正在获取 NO market options...")
+            no_options = self.client.get_market_options(self.no_token_id)
             print(f"[挂单] NO options: {no_options}")
 
+            print(f"[挂单] 正在挂 YES 买单...")
             # 挂 YES 买单（做多 YES）- 使用 GTC 限价单
             yes_order = self.client.create_order(
                 token_id=self.yes_token_id,
@@ -728,7 +731,9 @@ class TradingEngine:
                 side="BUY",
                 order_type="GTC",  # Good Till Cancelled
             )
+            print(f"[挂单] YES 订单完成: {yes_order}")
 
+            print(f"[挂单] 正在挂 NO 买单...")
             # 挂 NO 买单（做多 NO）- 使用 GTC 限价单
             no_order = self.client.create_order(
                 token_id=self.no_token_id,
@@ -737,6 +742,7 @@ class TradingEngine:
                 side="BUY",
                 order_type="GTC",
             )
+            print(f"[挂单] NO 订单完成: {no_order}")
 
             # 记录订单（注意：py-clob-client返回的字段名是orderID）
             yes_order_id = yes_order.get("orderID") or yes_order.get("order_id", "")
