@@ -1271,25 +1271,16 @@ class PolymarketClient:
             # 获取市场的 tick_size 和 neg_risk
             options = self.get_market_options(token_id)
             
-            # 构建订单参数
-            order_args = {
-                "token_id": token_id,
-                "price": api_price,
-                "size": size,
-                "side": side.upper(),
-            }
-            
-            # GTD 订单需要设置过期时间
-            if order_type == "GTD" and expiration:
-                order_args["expiration"] = expiration
-
             # 限价单：使用官方推荐的 OrderArgs（直接作为位置参数）
             # OrderArgs 签名: (token_id, price, size, side, fee_rate_bps=0, nonce=0, expiration=0, taker='0x...')
+            # GTD 订单需要设置 expiration 参数
+            expiration_time = expiration if order_type == "GTD" and expiration else 0
             args = OrderArgs(
                 token_id=token_id,
                 price=api_price,
                 size=size,
                 side=side.upper(),
+                expiration=expiration_time,
             )
             
             # tick_size 和 neg_risk 通过 options 传递
@@ -1324,42 +1315,6 @@ class PolymarketClient:
             import traceback
             traceback.print_exc()
             return {"success": False, "errorMsg": str(e)}
-
-    def create_gtc_order(
-        self,
-        token_id: str,
-        price: float,
-        size: float,
-        side: str,
-    ) -> Dict[str, Any]:
-        """创建 GTC 订单（Good Till Cancelled）"""
-        return self.create_order(token_id, price, size, side, "GTC")
-    
-    def create_gtd_order(
-        self,
-        token_id: str,
-        price: float,
-        size: float,
-        side: str,
-        duration_seconds: int = 300,
-    ) -> Dict[str, Any]:
-        """创建 GTD 订单（Good Till Date）
-        
-        Args:
-            duration_seconds: 订单有效期（秒），默认 300 秒（5分钟）
-        """
-        expiration = int(time.time()) + 60 + duration_seconds  # +60 秒安全缓冲
-        return self.create_order(token_id, price, size, side, "GTD", expiration)
-    
-    def create_fok_order(
-        self,
-        token_id: str,
-        price: float,
-        size: float,
-        side: str,
-    ) -> Dict[str, Any]:
-        """创建 FOK 订单（Fill Or Kill）- 必须全部成交或取消"""
-        return self.create_order(token_id, price, size, side, "FOK")
 
     def cancel_order(self, order_id: str) -> Dict[str, Any]:
         """取消订单"""
