@@ -562,8 +562,8 @@ class TradingEngine:
             # 市场数据获取成功，API 状态设为 connected
             self.api_status = "connected"
 
-            # 单行动态输出
-            print(f"\r[数据] YES ${yes_price:.2f} | NO ${no_price:.2f} | 买一 ${best_bid:.2f} | 卖一 ${best_ask:.2f} | 耗时 {self.last_update_duration:.0f}ms    ", end="", flush=True)
+            # 单行动态输出（只显示 YES/NO 价格）
+            print(f"\r[数据] YES ${yes_price:.2f} | NO ${no_price:.2f} | 耗时 {self.last_update_duration:.0f}ms    ", end="", flush=True)
 
             return {
                 "yes_price": yes_price,
