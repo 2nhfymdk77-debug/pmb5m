@@ -1839,7 +1839,7 @@ class PolymarketClient:
     def get_market_by_id(self, market_id: str) -> Optional[Dict[str, Any]]:
         """通过ID获取市场（带 TTL 缓存）
 
-        使用 Gamma API 直接查询，避免获取全部市场列表
+        使用 Gamma API 直接查询，支持市场ID和condition_id
         """
         # 检查 TTL 缓存
         cached = self.market_details_cache.get(market_id)
@@ -1852,7 +1852,19 @@ class PolymarketClient:
         self.rate_limiter.wait_if_needed("get_markets", limit, window)
 
         try:
-            # 使用 Gamma API 直接查询
+            import requests
+            # 方式1: 直接通过市场ID查询
+            url = f"{self.GAMMA_API_BASE}/markets/{market_id}"
+            response = requests.get(url, timeout=10)
+            
+            if response.status_code == 200:
+                market = response.json()
+                self._record_api_call(True)
+                # 缓存结果
+                self.market_details_cache.set(market_id, market)
+                return market
+            
+            # 方式2: 如果ID查询失败，尝试condition_id查询
             url = f"{self.GAMMA_API_BASE}/markets?condition_id={market_id}"
             response = requests.get(url, timeout=10)
             response.raise_for_status()
@@ -1894,6 +1906,7 @@ class PolymarketClient:
 
         except Exception as e:
             self._record_api_call(False)
+            print(f"[!] get_market_by_id 失败: {e}")
             return None
     
     def health_check(self) -> Dict[str, Any]:

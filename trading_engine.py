@@ -624,17 +624,31 @@ class TradingEngine:
             
             print(f"[诊断] 确认 market_id 已设置: {self.config.market_id[:30] if self.config.market_id else 'None'}...")
             
-            # 步骤5: 获取 token IDs
-            print(f"[诊断] 步骤5: 获取 token IDs...")
-            token_ids = self.client.get_token_ids(current_market_id)
-            print(f"[诊断] token_ids 返回: {token_ids}")
+            # 步骤5: 直接从市场数据获取 token IDs（避免重复API调用）
+            print(f"[诊断] 步骤5: 从市场数据获取 token IDs...")
+            clob_token_ids = market.get("clobTokenIds", [])
             
-            if not token_ids or "YES" not in token_ids or "NO" not in token_ids:
-                print(f"[错误] token_ids 格式错误: {token_ids}")
-                return None
+            if isinstance(clob_token_ids, str):
+                try:
+                    import json
+                    clob_token_ids = json.loads(clob_token_ids)
+                except:
+                    clob_token_ids = []
             
-            self.yes_token_id = token_ids.get("YES")
-            self.no_token_id = token_ids.get("NO")
+            if isinstance(clob_token_ids, list) and len(clob_token_ids) >= 2:
+                self.yes_token_id = clob_token_ids[0]
+                self.no_token_id = clob_token_ids[1]
+                print(f"[诊断] 直接从市场数据获取 token_ids 成功")
+            else:
+                # 备用方案：调用 API 获取
+                print(f"[诊断] 市场数据中没有 clobTokenIds，尝试调用 API...")
+                token_ids = self.client.get_token_ids(current_market_id)
+                if not token_ids or "YES" not in token_ids or "NO" not in token_ids:
+                    print(f"[错误] token_ids 格式错误: {token_ids}")
+                    return None
+                self.yes_token_id = token_ids.get("YES")
+                self.no_token_id = token_ids.get("NO")
+            
             print(f"[诊断] YES token: {self.yes_token_id[:20]}...")
             print(f"[诊断] NO token: {self.no_token_id[:20]}...")
             
