@@ -467,7 +467,7 @@ class TradingEngine:
         return self.fetch_real_market_data()
 
     def fetch_real_market_data(self) -> Optional[Dict[str, Any]]:
-        """获取真实市场数据（优化版：减少日志输出）"""
+        """获取真实市场数据（优化版：每个周期检查市场是否仍然活跃）"""
         start_time = time.time()
         
         # 调试日志到文件
@@ -477,20 +477,37 @@ class TradingEngine:
             f.write(f"\n=== fetch_real_market_data ===\n")
 
         try:
-            # 如果没有设置market_id，自动获取一个活跃市场
-            if not self.config.market_id:
-                try:
-                    markets = self.client.get_tradable_markets(limit=10)
-                    if markets:
-                        market = markets[0]
-                        self.config.market_id = market.get("condition_id", "")
-                        print(f"[获取] 使用市场: {market.get('question', 'Unknown')[:50]}...")
-                    else:
-                        raise TradingError("无法获取活跃市场列表")
-                except Exception as e:
-                    self.error_handler.handle(e, "获取活跃市场", recoverable=True)
-                    self.api_status = "error"
-                    return None
+            # 获取最新活跃市场列表
+            try:
+                markets = self.client.get_tradable_markets(limit=10)
+                if not markets:
+                    raise TradingError("无法获取活跃市场列表")
+                
+                # 检查当前市场是否仍然是活跃列表中的第一个
+                current_market = markets[0]
+                current_market_id = current_market.get("condition_id", "")
+                
+                # 检查市场是否变化或不再活跃
+                market_changed = (self.config.market_id != current_market_id)
+                
+                if market_changed or not self.config.market_id:
+                    # 市场已变化或未设置，获取新市场
+                    self.config.market_id = current_market_id
+                    self.current_event_id = current_market_id  # 重置事件ID
+                    self.has_traded_in_event = False  # 重置交易状态
+                    self.event_start_time = datetime.now()
+                    question = current_market.get('question', 'Unknown')
+                    print(f"[切换] 新事件: {question[:50]}...")
+                    
+                    # 调试日志
+                    with open(debug_log, "a", encoding="utf-8") as f:
+                        f.write(f"市场已切换: {current_market_id[:16]}...\n")
+                        f.write(f"问题: {question[:50]}...\n")
+                        
+            except Exception as e:
+                self.error_handler.handle(e, "获取活跃市场", recoverable=True)
+                self.api_status = "error"
+                return None
 
             # 获取代币ID
             try:
@@ -528,21 +545,8 @@ class TradingEngine:
             # 获取订单簿（失败不影响主流程）
             try:
                 orderbooks = self.client.get_market_orderbook(self.config.market_id)
-                
-                # 调试日志到文件
-                import os
-                debug_log = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug.log")
-                with open(debug_log, "a", encoding="utf-8") as f:
-                    f.write(f"orderbooks keys: {list(orderbooks.keys())}\n")
-                    if "YES" in orderbooks:
-                        f.write(f"YES orderbook: {orderbooks['YES']}\n")
-                    if "NO" in orderbooks:
-                        f.write(f"NO orderbook: {orderbooks['NO']}\n")
-                
                 yes_orderbook = orderbooks.get("YES", {})
-                print(f"[*] 订单簿 YES: bids={yes_orderbook.get('bids', [])[:1]}, asks={yes_orderbook.get('asks', [])[:1]}")
             except Exception as e:
-                print(f"[!] 获取订单簿失败: {e}")
                 yes_orderbook = {}
 
             # 提取买一卖一
@@ -550,7 +554,6 @@ class TradingEngine:
             asks = yes_orderbook.get("asks", [])
             best_bid = bids[0]["price"] if bids else 0
             best_ask = asks[0]["price"] if asks else 0
-            print(f"[*] 提取的买一卖一: bid={best_bid}, ask={best_ask}")
             spread = best_ask - best_bid if best_ask > best_bid else 0
 
             # 记录更新时间

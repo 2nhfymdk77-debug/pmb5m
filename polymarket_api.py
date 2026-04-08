@@ -561,14 +561,17 @@ class PolymarketClient:
             return []
 
     def get_tradable_markets(self, limit: int = 100) -> List[Dict[str, Any]]:
-        """获取可交易市场"""
+        """获取可交易市场（按创建时间倒序，最新的在前）"""
         if not self.client:
             return []
         try:
             response = self.client.get_markets()
             markets = response.get("data", [])
             # 过滤可交易市场
-            return [m for m in markets if m.get("active", False)]
+            active_markets = [m for m in markets if m.get("active", False)]
+            # 按创建时间倒序排序（最新的在前）
+            active_markets.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+            return active_markets[:limit]
         except Exception as e:
             print(f"获取可交易市场失败: {e}")
             return []
@@ -660,7 +663,6 @@ class PolymarketClient:
         # 方法1: 尝试使用 get_midpoints
         try:
             midpoints = self.get_midpoints([yes_token_id, no_token_id])
-            print(f"[*] get_midpoints 原始返回: {midpoints}")
             
             if midpoints:
                 # 直接用 token_id 作为 key 获取
@@ -673,16 +675,12 @@ class PolymarketClient:
                 if no_price is None:
                     no_price = midpoints.get(1)
                 
-                print(f"[*] 提取的价格: YES={yes_price}, NO={no_price}")
-                
                 if yes_price is not None and no_price is not None:
                     yes_price = float(yes_price)
                     no_price = float(no_price)
                     # 确保价格是 0-1 格式
                     yes_price = cents_to_float(yes_price)
                     no_price = cents_to_float(no_price)
-                    print(f"[*] 转换后价格: YES={yes_price}, NO={no_price}")
-                    print(f"价格(中间价): YES=${yes_price:.2f}, NO=${no_price:.2f}")
                     return {"YES": yes_price, "NO": no_price}
         except Exception as e:
             print(f"get_midpoints 失败: {e}")
@@ -711,9 +709,7 @@ class PolymarketClient:
                     # 如果没有 NO 订单簿数据，使用 1 - YES
                     no_price = 1.0 - yes_price
                 
-                print(f"[*] 订单簿价格: YES={yes_price}, NO={no_price}")
                 if yes_price > 0:
-                    print(f"价格(订单簿): YES=${yes_price:.2f}, NO=${no_price:.2f}")
                     return {"YES": yes_price, "NO": no_price}
         except Exception as e:
             print(f"get_orderbook 获取价格失败: {e}")
@@ -731,7 +727,6 @@ class PolymarketClient:
                     yes_price = cents_to_float(yes_price)
                     no_price = cents_to_float(no_price)
                     if yes_price > 0:
-                        print(f"价格(市场): YES=${yes_price:.2f}, NO=${no_price:.2f}")
                         return {"YES": yes_price, "NO": no_price}
                 
                 # 尝试其他可能的价格字段
@@ -742,7 +737,6 @@ class PolymarketClient:
                         if price > 0:
                             yes_price = price
                             no_price = 1.0 - price
-                            print(f"价格({field}): YES=${yes_price:.2f}, NO=${no_price:.2f}")
                             return {"YES": yes_price, "NO": no_price}
         except Exception as e:
             print(f"市场数据获取价格失败: {e}")
