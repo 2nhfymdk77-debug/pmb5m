@@ -160,13 +160,17 @@ class TradingEngine:
         self.first_order_confirmed = False
 
         # 启动信息
+        entry_display = config.entry_price / 100.0 if config.entry_price > 1 else config.entry_price
+        stop_display = config.stop_loss / 100.0 if config.stop_loss > 1 else config.stop_loss
+        take_display = config.take_profit / 100.0 if config.take_profit > 1 else config.take_profit
+        
         self.logger.info("=" * 60)
         self.logger.info("Polymarket自动交易引擎启动")
         self.logger.info("模式: 真实交易（生产模式）")
         self.logger.info(f"周期: {config.trade_cycle_minutes} 分钟")
-        self.logger.info(f"开仓价: ${config.entry_price}")
-        self.logger.info(f"止损价: ${config.stop_loss}")
-        self.logger.info(f"止盈价: ${config.take_profit}")
+        self.logger.info(f"开仓价: ${entry_display:.2f}")
+        self.logger.info(f"止损价: ${stop_display:.2f}")
+        self.logger.info(f"止盈价: ${take_display:.2f}")
         self.logger.info("=" * 60)
 
     def start(self) -> None:
