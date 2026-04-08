@@ -69,7 +69,7 @@ def load_env_variables() -> Dict[str, str]:
         value = os.getenv(env_key)
         if value:
             # 类型转换
-            if config_key in ["entry_price", "stop_loss", "take_profit", "initial_balance", "initial_position"]:
+            if config_key in ["entry_price", "stop_loss", "take_profit", "initial_balance"]:
                 env_vars[config_key] = float(value)
             elif config_key in ["trade_cycle_minutes", "chain_id", "signature_type"]:
                 env_vars[config_key] = int(value)
@@ -125,7 +125,6 @@ class TradingConfig:
     current_price: float = 75.0
     leverage: int = 1
     entry_price: float = 75.0
-    initial_position: float = 10.0
     stop_loss: float = 45.0
     take_profit: float = 95.0
     trade_cycle_minutes: int = 5
@@ -174,9 +173,8 @@ class TradingConfig:
         if self.take_profit <= self.entry_price:
             errors.append("止盈价格必须大于开仓价格")
 
-        # 验证仓位大小
+        # 验证余额
         try:
-            validate_position_size(self.initial_position, "初始开仓金额")
             validate_position_size(self.initial_balance, "初始余额")
         except ConfigValidationError as e:
             errors.append(str(e))

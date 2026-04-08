@@ -591,16 +591,15 @@ class TradingDashboard:
         card = Card(f"⚙️  交易参数", 80, self.box_style)
 
         entry_price = params.get('entry_price', 0)
-        initial_position = params.get('initial_position', 0)
         stop_loss = params.get('stop_loss', 0)
         take_profit = params.get('take_profit', 0)
         trade_cycle_minutes = params.get('trade_cycle_minutes', 5)
 
         card.add_line(f"开仓价格:   {self.formatter.bold(self.formatter.format_price(entry_price))}")
-        card.add_line(f"初始开仓:   {self.formatter.format_price(initial_position)}")
         card.add_line(f"止损价格:   {self.formatter.color(self.formatter.format_price(stop_loss), Colors.RED)}")
         card.add_line(f"止盈价格:   {self.formatter.color(self.formatter.format_price(take_profit), Colors.BRIGHT_GREEN)}")
         card.add_line(f"交易周期:   {self.formatter.bold(f'{trade_cycle_minutes}')} 分钟")
+        card.add_line(f"仓位规则:   余额≥初始×3^n → 开仓=2^n")
 
         return card.render()
 

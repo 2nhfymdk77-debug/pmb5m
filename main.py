@@ -31,7 +31,6 @@ def print_config(config: TradingConfig):
 
     print(f"  模式: 真实交易")
     print(f"  初始余额: ${config.initial_balance}")
-    print(f"  初始开仓: ${config.initial_position}")
     # 转换价格为 0-1 格式显示
     entry_display = config.entry_price / 100.0 if config.entry_price > 1 else config.entry_price
     stop_loss_display = config.stop_loss / 100.0 if config.stop_loss > 1 else config.stop_loss
@@ -40,6 +39,7 @@ def print_config(config: TradingConfig):
     print(f"  止损价格: ${stop_loss_display:.2f}")
     print(f"  止盈价格: ${take_profit_display:.2f}")
     print(f"  交易周期: {config.trade_cycle_minutes} 分钟")
+    print(f"  仓位计算: 余额≥初始×3^n → 开仓=2^n")
     print(f"\n  身份验证配置:")
     if config.private_key:
         print(f"    Private Key: {config.private_key[:10]}...{config.private_key[-10:]}")
@@ -87,14 +87,12 @@ def modify_parameters(config: TradingConfig) -> None:
 
     try:
         entry_price = float(input(f"  开仓价格 (当前: {config.entry_price}): ") or config.entry_price)
-        initial_position = float(input(f"  初始开仓 (当前: {config.initial_position}): ") or config.initial_position)
         stop_loss = float(input(f"  止损价格 (当前: {config.stop_loss}): ") or config.stop_loss)
         take_profit = float(input(f"  止盈价格 (当前: {config.take_profit}): ") or config.take_profit)
         trade_cycle = int(input(f"  交易周期分钟 (当前: {config.trade_cycle_minutes}): ") or config.trade_cycle_minutes)
 
         config.update(
             entry_price=entry_price,
-            initial_position=initial_position,
             stop_loss=stop_loss,
             take_profit=take_profit,
             trade_cycle_minutes=trade_cycle,

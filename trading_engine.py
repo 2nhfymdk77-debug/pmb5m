@@ -612,7 +612,6 @@ class TradingEngine:
             # 准备交易参数
             params = {
                 'entry_price': self.config.entry_price,
-                'initial_position': self.config.initial_position,
                 'stop_loss': self.config.stop_loss,
                 'take_profit': self.config.take_profit,
                 'trade_cycle_minutes': self.config.trade_cycle_minutes,
