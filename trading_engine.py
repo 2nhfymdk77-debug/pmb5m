@@ -548,10 +548,9 @@ class TradingEngine:
                 
                 # 调试：打印前3个市场的详细信息
                 if len(markets) > 0:
-                    print(f"[调试] 前3个市场字段:")
+                    print(f"[调试] 前3个市场:")
                     for i, m in enumerate(markets[:3]):
-                        print(f"    {i+1}. 字段列表: {list(m.keys())[:10]}")  # 只显示前10个字段
-                        print(f"       question: {str(m.get('question', ''))[:50]}")
+                        print(f"    {i+1}. question: {str(m.get('question', ''))[:50]}")
                         print(f"       slug: {str(m.get('slug', ''))[:60]}")
                         print(f"       condition_id: {str(m.get('condition_id', ''))[:30]}")
                 

@@ -558,17 +558,37 @@ class PolymarketClient:
             return []
 
     def get_tradable_markets(self, limit: int = 100) -> List[Dict[str, Any]]:
-        """获取可交易市场（按创建时间倒序，最新的在前）"""
+        """获取可交易市场（使用Gamma API获取活跃事件）"""
         if not self.client:
             return []
         try:
-            response = self.client.get_markets()
-            markets = response.get("data", [])
-            # 过滤可交易市场
-            active_markets = [m for m in markets if m.get("active", False)]
-            # 按创建时间倒序排序（最新的在前）
-            active_markets.sort(key=lambda x: x.get("created_at", ""), reverse=True)
-            return active_markets[:limit]
+            # 使用 Gamma API 获取活跃事件（包含 slug）
+            import requests
+            url = "https://gamma-api.polymarket.com/events"
+            params = {
+                "active": "true",
+                "closed": "false",
+                "limit": limit,
+                "order": "created_at",
+                "ascending": "false"
+            }
+            response = requests.get(url, params=params, timeout=10)
+            if response.status_code == 200:
+                events = response.json()
+                # 事件包含 markets 数组，我们需要提取市场信息
+                result = []
+                for event in events:
+                    markets = event.get("markets", [])
+                    for market in markets:
+                        # 将事件信息添加到市场信息中
+                        market_copy = market.copy()
+                        market_copy["slug"] = event.get("slug", "")
+                        market_copy["event_title"] = event.get("title", "")
+                        result.append(market_copy)
+                return result
+            else:
+                print(f"获取活跃事件失败: {response.status_code}")
+                return []
         except Exception as e:
             print(f"获取可交易市场失败: {e}")
             return []
