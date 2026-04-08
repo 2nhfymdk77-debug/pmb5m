@@ -380,6 +380,11 @@ class PolymarketClient:
             funder_address: 资金地址（代理钱包地址）
         """
         self.private_key = private_key
+        # 处理私钥格式：确保传给 SDK 时不带 0x 前缀（Ethereum 标准）
+        self._raw_private_key = private_key
+        if private_key and private_key.startswith("0x"):
+            self._raw_private_key = private_key[2:]
+            print(f"[*] 私钥格式: 已移除 0x 前缀（长度: {len(self._raw_private_key)}）")
         self.api_key = api_key
         self.api_secret = api_secret
         self.passphrase = passphrase
@@ -427,7 +432,7 @@ class PolymarketClient:
             client_args = {
                 "host": "https://clob.polymarket.com",
                 "chain_id": chain_id,
-                "key": private_key,
+                "key": self._raw_private_key,
             }
 
             # 准备 API 凭证（L2 身份验证）
@@ -1087,9 +1092,10 @@ class PolymarketClient:
             self.client = ClobClient(
                 host="https://clob.polymarket.com",
                 chain_id=137,  # Polygon
-                key=self.private_key,
+                key=self._raw_private_key,
                 creds=self.api_credentials,  # 使用新创建的凭证
-                signature_type=self.signature_type  # 继承实例的签名类型
+                signature_type=self.signature_type,  # EOA = 0
+                funder=self.funder_address  # 必须传递资金地址！
             )
             
             # 验证客户端是否正确初始化

@@ -91,8 +91,8 @@ def validate_private_key(private_key: str) -> bool:
     """验证私钥格式"""
     if not private_key:
         return True  # 空私钥允许（公开 API 模式）
-    # Ethereum 私钥格式：0x 开头的 64 个十六进制字符
-    pattern = r'^0x[a-fA-F0-9]{64}$'
+    # Ethereum 私钥格式：64 个十六进制字符（可选 0x 前缀）
+    pattern = r'^(0x)?[a-fA-F0-9]{64}$'
     return bool(re.match(pattern, private_key))
 
 
