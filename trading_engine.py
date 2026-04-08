@@ -196,13 +196,31 @@ class TradingEngine:
             self.logger.error(f"交易循环出错: {e}")
             self.stop()
 
-    def _try_initialize_balance(self) -> bool:
+    def _try_initialize_balance(self, skip_auth_check: bool = False) -> bool:
         """尝试初始化余额和授权
         
-        根据 Polymarket 官方文档：
-        - 下单前必须检查授权状态
-        - 如果授权额度不足，需要调用 update_balance_allowance()
+        Args:
+            skip_auth_check: 是否跳过授权检查（用于测试）
+        
+        Returns:
+            True 如果初始化成功（或跳过检查）
         """
+        # 如果跳过授权检查，直接尝试获取余额
+        if skip_auth_check:
+            print("[启动] [*] 跳过授权检查，直接获取余额...")
+            try:
+                balance = self.client.get_balance()
+                if balance is not None and balance >= 0:
+                    self.balance = balance
+                    self.initial_balance = balance
+                    self.api_status = "connected"
+                    print(f"[启动] [OK] 当前余额: ${balance:.2f}")
+                    return True
+            except Exception as e:
+                print(f"[启动] [X] 获取余额失败: {e}")
+                self.api_status = "error"
+                return False
+        
         try:
             # 1. 先检查并初始化授权
             print("[启动] [*] 检查授权状态...")
@@ -235,13 +253,17 @@ class TradingEngine:
                     else:
                         print(f"[启动] [OK] 授权额度: ${allowance:.2f}")
                     
-                    if balance > 0:
-                        return True
-                    else:
-                        print("[启动] [!] 余额为 0，请确认钱包中是否有 USDC.e")
-                        return False
+                    # 如果余额为0，给出警告但不阻止启动
+                    if balance == 0:
+                        print("[启动] [!] 警告: 余额为 0，将使用配置中的 initial_balance 进行仓位计算")
+                        print("[启动] [!] 请确认钱包中是否有 USDC.e")
+                        return True  # 仍然返回 True，允许启动
+                    
+                    return True
                 else:
                     print("[启动] [!] 无法获取余额，API 可能未正确初始化")
+                    self.api_status = "error"
+                    return False
             except AttributeError as e:
                 print(f"[启动] [X] SDK 方法调用失败: {e}")
                 print("[启动] [!] 请确保 API 凭证配置正确")
