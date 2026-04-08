@@ -934,27 +934,6 @@ class PolymarketClient:
         
         return result
 
-
-# === Helper Functions ===
-
-def quick_get_price(client: PolymarketClient, token_id: str) -> float:
-    """快速获取单个代币的价格（用于高频监控）
-    
-    Args:
-        client: PolymarketClient 实例
-        token_id: 代币ID
-        
-    Returns:
-        价格（0-100），获取失败返回 -1
-    """
-    try:
-        orders = client.get_orders(token_id)
-        if orders and len(orders) > 0:
-            return orders[0].get("price", 0)
-        return -1
-    except:
-        return -1
-
     def has_api_credentials(self) -> bool:
         """检查是否有完整的 API 凭证"""
         return all([
