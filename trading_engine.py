@@ -760,7 +760,7 @@ class TradingEngine:
                     "size": position_size,
                 }
 
-            print(f"[挂单] [OK] 双向限价单已挂: YES @ ${entry_price:.2f} | NO @ ${entry_price:.2f}")
+            print(f"[挂单] [OK] 双向限价单已挂: YES @ ${entry_display:.2f} | NO @ ${entry_display:.2f}")
             print(f"[挂单] 订单ID: YES={yes_order_id[:20] if yes_order_id else 'N/A'}..., NO={no_order_id[:20] if no_order_id else 'N/A'}...")
 
         except Exception as e:
@@ -1175,7 +1175,7 @@ class TradingEngine:
             return
 
         position = self.current_position
-        entry_price = position["entry_price"]
+        entry_price_raw = position["entry_price"]  # 可能是 75 或 0.75
         position_type = position["type"]
         position_size = position["size"]
         token = position.get("token", "YES")
@@ -1186,6 +1186,9 @@ class TradingEngine:
             if price > 1:
                 return price / 100.0
             return price
+
+        # 统一转换
+        entry_price = to_float_price(entry_price_raw)
 
         # 确定平仓价格
         if exit_reason == "STOP_LOSS":
