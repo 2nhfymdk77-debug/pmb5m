@@ -170,6 +170,7 @@ class HeartbeatManager:
         consecutive_failures = 0
         max_failures = 3  # 连续失败3次后减少日志频率
         first_run = True
+        has_valid_id = False  # 是否已获得有效心跳ID
         
         while self._running:
             try:
@@ -179,10 +180,14 @@ class HeartbeatManager:
                 
                 resp = self.client.post_heartbeat(hb_id)
                 if resp and "heartbeat_id" in resp:
+                    old_id = self.heartbeat_id
                     self.heartbeat_id = resp["heartbeat_id"]
                     consecutive_failures = 0  # 重置失败计数
                     first_run = False
                     self._initialized = True
+                    if not has_valid_id:
+                        print("[OK] 心跳ID已获取，会话保持活跃")
+                        has_valid_id = True
                 time.sleep(self._interval)
             except Exception as e:
                 consecutive_failures += 1
@@ -192,12 +197,12 @@ class HeartbeatManager:
                 if "Invalid Heartbeat ID" in error_msg or "invalid" in error_msg.lower():
                     # 心跳 ID 无效，重置为 None 重新创建
                     self.heartbeat_id = None
-                    if consecutive_failures <= max_failures:
-                        print(f"[!] 心跳 ID 无效，将重新创建心跳")
+                    if consecutive_failures <= max_failures and not has_valid_id:
+                        print(f"[*] 等待获取有效心跳ID（首次下单后将正常）")
                 elif first_run and ("401" in error_msg or "Unauthorized" in error_msg):
                     if consecutive_failures <= max_failures:
                         print(f"[!] 心跳认证失败，请检查 API 凭证")
-                elif consecutive_failures <= max_failures:
+                elif consecutive_failures <= max_failures and has_valid_id:
                     print(f"[X] 心跳发送失败: {e}")
                     
                 time.sleep(self._interval)  # 即使失败也继续尝试
