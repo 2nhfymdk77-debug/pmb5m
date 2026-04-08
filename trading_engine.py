@@ -419,7 +419,16 @@ class TradingEngine:
                 self.place_dual_orders(position_size)
 
                 # 9. 等待成交或周期结束（最多等待到周期结束）
-                self.wait_for_execution(position_size, max_wait=30)
+                has_execution = self.wait_for_execution(position_size, max_wait=30)
+                
+                # 如果没有订单成交，提前结束此周期
+                if not has_execution and not self.current_position:
+                    print("[周期] 订单创建失败，跳过此周期，等待下一周期...")
+                    elapsed = time.time() - cycle_start
+                    remaining_time = max(0, cycle_duration - elapsed)
+                    if remaining_time > 0:
+                        time.sleep(remaining_time)
+                    return
 
                 # 10. 标记为已交易（无论是否成交）
                 if not self.has_traded_in_event:
@@ -770,16 +779,24 @@ class TradingEngine:
                 self.logger.error(f"取消订单失败: {e}")
         self.pending_orders.clear()
 
-    def wait_for_execution(self, position_size: float, max_wait: int = 30) -> None:
+    def wait_for_execution(self, position_size: float, max_wait: int = 30) -> bool:
         """
         等待订单成交
-
+        
         真实交易模式：轮询订单状态，成交后取消另一侧
         
         Args:
             position_size: 仓位大小
             max_wait: 最大等待时间（秒）
+            
+        Returns:
+            True 如果有订单成交，False 如果没有订单或超时
         """
+        # 如果没有挂单，直接返回
+        if not self.pending_orders:
+            print("[等待] [X] 没有挂单可等待（订单创建可能失败）")
+            return False
+            
         print(f"\r[等待] 等待订单成交... (最多 {max_wait} 秒)", end="", flush=True)
 
         start_time = time.time()
@@ -831,7 +848,7 @@ class TradingEngine:
                             # 取消另一个订单
                             self._cancel_pending_orders()
 
-                            return
+                            return True
                 except Exception:
                     # 静默处理查询失败，不打印警告
                     pass
@@ -849,6 +866,8 @@ class TradingEngine:
         print(f"\r[等待] ⏰ 等待超时 ({max_wait} 秒)，取消所有订单       ")
         print()
         self._cancel_pending_orders()
+        
+        return False
 
     def get_event_result(self) -> Optional[str]:
         """
