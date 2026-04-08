@@ -1156,15 +1156,29 @@ class PolymarketClient:
                 print("[!] get_balance: 响应为 None")
             elif isinstance(resp, dict):
                 raw_balance = resp.get("balance", 0) or 0
-                raw_allowance = resp.get("allowance", 0) or 0
                 
-                # 转换余额（如果值很大，可能是以微单位返回）
+                # 处理 allowances 字典（取第一个值）
+                allowances = resp.get("allowances", {})
+                if isinstance(allowances, dict) and allowances:
+                    raw_allowance = list(allowances.values())[0]
+                else:
+                    raw_allowance = resp.get("allowance", 0) or 0
+                
+                # 转换余额（balance 可能是字符串，需要先转为数字）
                 # USDC 通常是 6 位小数，如果余额 > 10000，除以 10^6
-                balance = float(raw_balance)
+                try:
+                    balance = float(str(raw_balance).strip('"'))
+                except (ValueError, TypeError):
+                    balance = 0.0
+                    
                 if balance > 10000:
                     balance = balance / 1000000  # 转换为 USDC
                 
-                allowance = float(raw_allowance)
+                try:
+                    allowance = float(str(raw_allowance).strip('"'))
+                except (ValueError, TypeError):
+                    allowance = 0.0
+                    
                 if allowance > 10000 and allowance != float("inf"):
                     allowance = allowance / 1000000
                 
