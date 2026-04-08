@@ -464,6 +464,12 @@ class TradingEngine:
     def fetch_real_market_data(self) -> Optional[Dict[str, Any]]:
         """获取真实市场数据（优化版：减少日志输出）"""
         start_time = time.time()
+        
+        # 调试日志到文件
+        import os
+        debug_log = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug.log")
+        with open(debug_log, "a", encoding="utf-8") as f:
+            f.write(f"\n=== fetch_real_market_data ===\n")
 
         try:
             # 如果没有设置market_id，自动获取一个活跃市场
@@ -517,6 +523,17 @@ class TradingEngine:
             # 获取订单簿（失败不影响主流程）
             try:
                 orderbooks = self.client.get_market_orderbook(self.config.market_id)
+                
+                # 调试日志到文件
+                import os
+                debug_log = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug.log")
+                with open(debug_log, "a", encoding="utf-8") as f:
+                    f.write(f"orderbooks keys: {list(orderbooks.keys())}\n")
+                    if "YES" in orderbooks:
+                        f.write(f"YES orderbook: {orderbooks['YES']}\n")
+                    if "NO" in orderbooks:
+                        f.write(f"NO orderbook: {orderbooks['NO']}\n")
+                
                 yes_orderbook = orderbooks.get("YES", {})
                 print(f"[*] 订单簿 YES: bids={yes_orderbook.get('bids', [])[:1]}, asks={yes_orderbook.get('asks', [])[:1]}")
             except Exception as e:
