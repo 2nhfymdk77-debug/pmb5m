@@ -986,33 +986,42 @@ class TradingEngine:
                 if actual_price < 1:
                     actual_price = actual_price * 100
                 
+                # 获取订单返回的实际成交股数
+                filled_size = order.get("actual_size") or order.get("filled_size") or order.get("size_filled") or actual_size
+                
+                # 等待代币余额更新
+                print(f"[等待] 等待代币余额更新...")
+                time.sleep(3)
+                
+                # 查询实际代币余额（更准确）
+                real_balance = self.client.get_token_balance(token_id)
+                if real_balance > 0:
+                    filled_size = real_balance
+                    print(f"[买入] 实际代币余额: {filled_size}")
+                
                 # 记录持仓
                 self.current_position = {
                     "type": "LONG",
                     "token": token,
                     "token_id": token_id,
                     "entry_price": actual_price,
-                    "size": actual_size,
+                    "size": filled_size,  # 使用实际成交股数
                     "timestamp": datetime.now(),
                 }
                 
                 # 计算成交金额
-                trade_amount = actual_size * actual_price / 100
-                print(f"[买入] ✓ 成交 {actual_size}股 @ {int(actual_price)}% | 金额: ${trade_amount:.2f}")
+                trade_amount = filled_size * actual_price / 100
+                print(f"[买入] ✓ 成交 {filled_size}股 @ {int(actual_price)}% | 金额: ${trade_amount:.2f}")
                 
                 # 标记为已交易
                 self.has_traded_in_event = True
                 
-                # 等待代币余额更新（买入后需要等待系统确认）
-                print(f"[等待] 等待代币余额更新...")
-                time.sleep(2)  # 等待 2 秒让系统更新代币余额
-                
-                # 设置止损止盈
+                # 设置止损止盈（使用实际成交股数）
                 self.stop_loss_order = None
                 self.take_profit_order = None
                 
-                stop_result = self.place_stop_loss_order(actual_size)
-                take_result = self.place_take_profit_order(actual_size)
+                stop_result = self.place_stop_loss_order(filled_size)
+                take_result = self.place_take_profit_order(filled_size)
                 
                 self.waiting_for_entry = False
             else:
