@@ -216,24 +216,19 @@ class TradingEngine:
         print("[!] 启动确认 - 交易参数 [!]")
         print("=" * 60)
         
-        # 转换配置价格为 0-1 格式显示
-        entry_display = self.config.entry_price / 100.0 if self.config.entry_price > 1 else self.config.entry_price
-        stop_loss_display = self.config.stop_loss / 100.0 if self.config.stop_loss > 1 else self.config.stop_loss
-        take_profit_display = self.config.take_profit / 100.0 if self.config.take_profit > 1 else self.config.take_profit
-        
         print(f"  当前余额:     ${self.balance:.2f}")
-        print(f"  配置余额:     ${self.config_initial_balance:.2f}")
-        print(f"  开仓价格:     ${entry_display:.2f} (YES和NO同时挂单)")
-        print(f"  止损价格:     ${stop_loss_display:.2f}")
-        print(f"  止盈价格:     ${take_profit_display:.2f}")
+        print(f"  开仓价格:     {int(self.config.entry_price)}% (等待价格涨到此价位时买入)")
+        print(f"  止损价格:     {int(self.config.stop_loss)}% (价格监控)")
+        print(f"  止盈价格:     {int(self.config.take_profit)}% (限价单+价格监控)")
         print(f"  交易周期:     {self.config.trade_cycle_minutes} 分钟")
         print("=" * 60)
         print()
-        print("  即将开始自动交易:")
-        print("  - 每5分钟自动挂双向限价单（YES和NO各一单）")
-        print("  - 一侧成交后立即取消另一侧")
-        print("  - 成交后立即设置止损止盈")
-        print("  - 止损或止盈触发后自动平仓")
+        print("  交易策略:")
+        print("  - 监控YES/NO价格，等待涨到目标价时买入")
+        print("  - 买入后设置止损止盈")
+        print("  - 止损：价格监控，价格<=止损价时卖出")
+        print("  - 止盈：限价卖单 + 价格监控双重保障")
+        print("  - 周期结束按事件结果结算")
         print()
         print("  [y/Y] 确认开始自动交易")
         print("  [n/N] 退出程序")
@@ -980,7 +975,9 @@ class TradingEngine:
                     "timestamp": datetime.now(),
                 }
                 
-                print(f"[买入] ✓ 成交 {actual_size}股 @ {int(actual_price)}%")
+                # 计算成交金额
+                trade_amount = actual_size * actual_price / 100
+                print(f"[买入] ✓ 成交 {actual_size}股 @ {int(actual_price)}% | 金额: ${trade_amount:.2f}")
                 
                 # 标记为已交易
                 self.has_traded_in_event = True
@@ -1783,7 +1780,8 @@ class TradingEngine:
 
         # 卖出持仓代币（如果是 TAKE_PROFIT_FILLED 则跳过）
         if exit_reason == "TAKE_PROFIT_FILLED":
-            print(f"[平仓] 止盈已成交 @ {int(exit_price*100)}%")
+            trade_amount = position_size * exit_price
+            print(f"[平仓] 止盈已成交 {position_size}股 @ {int(exit_price*100)}% | 金额: ${trade_amount:.2f}")
         else:
             print(f"[平仓] 卖出 {token} {position_size}股")
             
@@ -1828,7 +1826,9 @@ class TradingEngine:
                                         )
                                         if isinstance(actual_price, (int, float)) and actual_price > 1:
                                             actual_price = actual_price / 100.0
-                                        print(f"[平仓] ✓ 成交 @ {int(actual_price*100)}%")
+                                        # 计算成交金额
+                                        trade_amount = position_size * actual_price
+                                        print(f"[平仓] ✓ 成交 {position_size}股 @ {int(actual_price*100)}% | 金额: ${trade_amount:.2f}")
                                         exit_price = actual_price
                                         break
                             except:
@@ -1884,7 +1884,11 @@ class TradingEngine:
     ) -> None:
         """平仓并计算盈亏"""
         # 计算盈亏
-        pnl = (exit_price - entry_price) * position_size / entry_price
+        pnl = (exit_price - entry_price) * position_size
+        
+        # 计算买入和卖出金额
+        buy_amount = position_size * entry_price
+        sell_amount = position_size * exit_price
 
         # 更新余额
         balance_before = self.balance
@@ -1910,27 +1914,13 @@ class TradingEngine:
 
         # 输出结果
         result = "✓" if pnl >= 0 else "✗"
-        print(f"[结果] {token} {result} {pnl:+.2f} | 余额: {balance_before:.2f} → {balance_after:.2f}")
+        print(f"[结果] {token} {result} {pnl:+.2f} | 买入: ${buy_amount:.2f} → 卖出: ${sell_amount:.2f} | 余额: {balance_before:.2f} → {balance_after:.2f}")
 
         # 清除持仓
         self.current_position = None
         self.stop_loss_order = None
         self.take_profit_order = None
 
-    def _print_trade_summary(self, last_trade: TradeRecord) -> None:
-        """输出交易统计"""
-        stats = self.trade_history.get_statistics()
-        
-        print(f"\n[统计] 总交易: {stats['total_trades']} | 胜率: {stats['win_rate']:.1%} | 总盈亏: {stats['total_pnl']:+.2f}")
-        exit_reason_map = {
-            "STOP_LOSS": "止损触发",
-            "TAKE_PROFIT": "止盈触发",
-            "TIMEOUT": "周期到期",
-            "FORCED_CLOSE": "强制平仓"
-        }
-        print(f"  退出原因: {exit_reason_map.get(last_trade.exit_reason, last_trade.exit_reason)}")
-        print(f"  时间: {last_trade.timestamp}")
-        
     def log_statistics(self) -> None:
         """输出统计信息"""
         stats = self.trade_history.get_statistics()
