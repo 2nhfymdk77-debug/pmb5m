@@ -458,7 +458,7 @@ class TradingEngine:
                 sys.exit(0)
 
     def _wait_next_cycle(self) -> None:
-        """等待到下一个5分钟周期边界"""
+        """等待到下一个5分钟周期边界（带进度显示）"""
         from datetime import datetime, timezone, timedelta
         
         edt = timezone(timedelta(hours=-4))
@@ -479,8 +479,21 @@ class TradingEngine:
         wait_seconds = (next_period - now_edt).total_seconds()
         
         print(f"[等待] 等待到下一个周期边界: {next_period.strftime('%H:%M:%S')} (等待{int(wait_seconds)}秒)")
+        print(f"[等待] 期间会每30秒输出一次进度，请勿关闭程序...")
+        
         if wait_seconds > 0:
-            time.sleep(wait_seconds)
+            # 每30秒输出一次进度
+            elapsed = 0
+            while elapsed < wait_seconds and self.is_running:
+                sleep_time = min(30, wait_seconds - elapsed)
+                time.sleep(sleep_time)
+                elapsed += sleep_time
+                
+                remaining = int(wait_seconds - elapsed)
+                if remaining > 0:
+                    print(f"[等待] 剩余 {remaining} 秒...")
+            
+            print(f"[等待] 等待结束，开始新周期！")
 
     def execute_trade_cycle(self) -> None:
         """执行一个完整的交易周期（5分钟）"""
