@@ -545,24 +545,29 @@ class TradingEngine:
             event_remaining = market_data.get("remaining_seconds", 300)
             cycle_duration = int(event_remaining)
             
+            # 获取当前市场 ID
+            new_market_id = self.config.market_id
+            
             print(f"[*] 事件剩余时间: {cycle_duration} 秒 ({cycle_duration/60:.1f} 分钟)")
+            print(f"[*] 市场 ID: {new_market_id[:20] if new_market_id else 'N/A'}...")
             
             # 如果剩余时间少于30秒，跳过此周期，立即开始新周期
             if cycle_duration < 30:
                 print(f"[跳过] 事件即将结束（剩余{cycle_duration}秒），立即开始新周期...")
+                # 注意：不重置状态，让下一个周期正确判断是否为同一事件
+                # 如果下一个周期获取到新市场，is_new_event 会自动变为 True
                 # 立即返回，让主循环获取新的市场
                 return
 
             # 2. 检查是否是同一事件
-            current_market_id = self.config.market_id
-            is_new_event = self.current_event_id != current_market_id
+            is_new_event = self.current_event_id != new_market_id
             
             if is_new_event:
                 # 新事件，重置交易状态
-                self.current_event_id = current_market_id
+                self.current_event_id = new_market_id
                 self.has_traded_in_event = False
                 self.event_start_time = datetime.now()
-                print(f"[周期] 新事件: {current_market_id[:16]}...")
+                print(f"[周期] 新事件: {new_market_id[:16]}...")
 
             # 3. 如果当前事件已交易过，跳过挂单
             if self.has_traded_in_event:
@@ -595,6 +600,11 @@ class TradingEngine:
                 # 如果没有买入，跳过此周期
                 if not has_execution and not self.current_position:
                     print("[周期] 价格未触发，跳过此周期...")
+                    
+                    # 标记为已交易（已尝试，但未成交）
+                    if not self.has_traded_in_event:
+                        self.has_traded_in_event = True
+                        print("[周期] 标记事件为已处理（价格未触发）")
                     
                     # 等待剩余时间（如果有）
                     elapsed = time.time() - cycle_start
@@ -1123,6 +1133,11 @@ class TradingEngine:
                 print(f"  实际成交价: {actual_price} (美分单位)")
                 print(f"  成交股数: {actual_size}")
                 print(f"  成交金额: ${actual_size * actual_price / 100:.2f}")
+                
+                # 立即标记为已交易（防止重复下单）
+                if not self.has_traded_in_event:
+                    self.has_traded_in_event = True
+                    print("[买入] 标记事件为已交易")
                 
                 # 设置止损止盈
                 print(f"\n[止损止盈] 设置止损止盈...")
