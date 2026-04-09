@@ -561,14 +561,14 @@ class TradingEngine:
                 else:
                     has_execution = False
 
-                # 如果没有买入，标记事件为已处理
+                # 如果没有买入，不标记为已交易（让下一个周期重新检查）
                 if not has_execution and not self.current_position:
-                    self.has_traded_in_event = True
-                    print("[跳过] 价格未触发")
+                    print("[跳过] 价格未触发，等待下一个周期")
                     return
 
-                # 标记为已交易
-                self.has_traded_in_event = True
+                # 只有买入成功才标记为已交易
+                if has_execution or self.current_position:
+                    self.has_traded_in_event = True
 
             # 6. 如果有持仓，监控止损止盈或到期
             if self.current_position:
