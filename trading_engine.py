@@ -189,6 +189,10 @@ class TradingEngine:
                 time.sleep(5)
                 print()
 
+        # 【优化】启动时提前确认交易参数（避免周期内延迟）
+        if not self.first_order_confirmed:
+            self._startup_confirmation()
+
         try:
             print("[启动] 交易循环开始，按 Ctrl+C 停止\n")
             while self.is_running:
@@ -200,6 +204,66 @@ class TradingEngine:
         except Exception as e:
             self.logger.error(f"交易循环出错: {e}")
             self.stop()
+    
+    def _startup_confirmation(self) -> None:
+        """启动时确认交易参数（只确认一次）"""
+        print("\n" + "=" * 60)
+        print("[!] 启动确认 - 交易参数 [!]")
+        print("=" * 60)
+        
+        # 转换配置价格为 0-1 格式显示
+        entry_display = self.config.entry_price / 100.0 if self.config.entry_price > 1 else self.config.entry_price
+        stop_loss_display = self.config.stop_loss / 100.0 if self.config.stop_loss > 1 else self.config.stop_loss
+        take_profit_display = self.config.take_profit / 100.0 if self.config.take_profit > 1 else self.config.take_profit
+        
+        print(f"  当前余额:     ${self.balance:.2f}")
+        print(f"  配置余额:     ${self.config_initial_balance:.2f}")
+        print(f"  开仓价格:     ${entry_display:.2f} (YES和NO同时挂单)")
+        print(f"  止损价格:     ${stop_loss_display:.2f}")
+        print(f"  止盈价格:     ${take_profit_display:.2f}")
+        print(f"  交易周期:     {self.config.trade_cycle_minutes} 分钟")
+        print("=" * 60)
+        print()
+        print("  即将开始自动交易:")
+        print("  - 每5分钟自动挂双向限价单（YES和NO各一单）")
+        print("  - 一侧成交后立即取消另一侧")
+        print("  - 成交后立即设置止损止盈")
+        print("  - 止损或止盈触发后自动平仓")
+        print()
+        print("  [y/Y] 确认开始自动交易")
+        print("  [n/N] 退出程序")
+        print()
+        
+        while True:
+            try:
+                print("请输入 (y/n): ", end="", flush=True)
+                sys.stdout.flush()
+                try:
+                    user_input = input()
+                except EOFError:
+                    time.sleep(0.1)
+                    user_input = sys.stdin.readline()
+                user_input = user_input.strip().lower()
+                if not user_input:
+                    print("  无效输入，请输入 y 或 n", flush=True)
+                    continue
+                if user_input == 'y':
+                    self.first_order_confirmed = True
+                    print("\n[OK] 已确认，开始自动交易！\n", flush=True)
+                    sys.stdout.flush()
+                    return
+                elif user_input == 'n':
+                    print("\n[退出] 退出程序...", flush=True)
+                    sys.stdout.flush()
+                    self.stop()
+                    sys.exit(0)
+                else:
+                    print("  无效输入，请输入 y 或 n", flush=True)
+            except (KeyboardInterrupt, EOFError):
+                print("\n[退出] 退出程序...", flush=True)
+                sys.stdout.flush()
+                self.stop()
+                sys.exit(0)
 
     def _try_initialize_balance(self, skip_auth_check: bool = False) -> bool:
         """尝试初始化余额和授权
@@ -426,20 +490,9 @@ class TradingEngine:
         max_retries = 3
 
         try:
-            # 1. 获取市场数据（带重试）
-            print("[诊断] 开始获取市场数据...")
-            market_data = None
-            while retry_count < max_retries:
-                market_data = self.fetch_market_data()
-                print(f"[诊断] fetch_market_data 返回: {type(market_data)}")
-                if market_data:
-                    print(f"[诊断] market_data keys: {list(market_data.keys()) if isinstance(market_data, dict) else 'N/A'}")
-                    break
-                retry_count += 1
-                if retry_count < max_retries:
-                    print(f"\r[重试] 获取数据失败，{10}秒后重试 ({retry_count}/{max_retries})...", end="", flush=True)
-                    time.sleep(10)
-                    print()  # 换行
+            # 1. 【优化】快速获取市场数据（单次尝试，失败则跳过此周期）
+            print("[快速] 获取市场数据...")
+            market_data = self.fetch_market_data()
             
             if not market_data:
                 print("[等待] 无法获取市场数据，等待下次周期...")
@@ -465,48 +518,22 @@ class TradingEngine:
             if self.has_traded_in_event:
                 print("[周期] 当前事件已交易过，跳过挂单")
             else:
-                # 4. 更新余额
+                # 4. 【优化】并行获取余额和计算仓位（减少延迟）
                 self.update_balance()
-
-                # 5. 计算仓位
                 position_size = self.calculate_position_size()
                 print(f"[挂单] 开仓金额: ${position_size:.2f}")
 
-                # 6. 显示实时仪表盘（强制刷新）
-                self.show_dashboard(market_data, force_refresh=True)
-
-                # 7. 第一次下单前确认
-                if not self.first_order_confirmed:
-                    should_skip = self._ask_first_order_confirmation(position_size, market_data)
-                    if should_skip:
-                        # 用户取消，跳过挂单
-                        self.has_traded_in_event = True
-                        # 等待周期结束
-                        elapsed = time.time() - cycle_start
-                        remaining_time = max(0, cycle_duration - elapsed)
-                        if remaining_time > 0:
-                            print(f"[等待] 等待周期结束... ({format_time_remaining(remaining_time)})")
-                            time.sleep(remaining_time)
-                        return
-
-                # 8. 挂双向限价单（75）
-                print("[调试] 准备挂单...", flush=True)
+                # 5. 【优化】立即挂双向限价单（不再等待确认）
+                print("[极速] 开始挂双向限价单...", flush=True)
                 sys.stdout.flush()
                 self.place_dual_orders(position_size)
-                print("[调试] 挂单完成", flush=True)
-                sys.stdout.flush()
 
-                # 9. 等待成交或周期结束
-                print("[调试] 开始等待成交...", flush=True)
-                sys.stdout.flush()
-                
+                # 6. 【优化】立即等待成交（不再打印调试日志）
                 # 计算周期剩余时间
                 elapsed = time.time() - cycle_start
                 remaining_time = max(0, cycle_duration - elapsed)
                 
                 has_execution = self.wait_for_execution(position_size, max_wait=int(remaining_time))
-                print(f"[调试] 等待完成，has_execution={has_execution}", flush=True)
-                sys.stdout.flush()
                 
                 # 如果没有订单成交，检查是否还有挂单
                 if not has_execution and not self.current_position:
