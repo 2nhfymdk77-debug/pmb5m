@@ -508,7 +508,14 @@ class TradingEngine:
                 token = self.current_position.get("token", "YES")
                 token_id = self.current_position.get("token_id")
                 position_size = self.current_position.get("size", 0)
-                entry_price = self.current_position["entry_price"]
+                entry_price_raw = self.current_position["entry_price"]
+                
+                # 转换为 0-1 格式
+                def to_float_price(price: float) -> float:
+                    if price > 1:
+                        return price / 100.0
+                    return price
+                entry_price = to_float_price(entry_price_raw)
                 
                 # 检查代币余额
                 if token_id:
@@ -516,59 +523,102 @@ class TradingEngine:
                     print(f"[安全检查] 上周期持仓: {token} {position_size}股 | 代币余额: {actual_balance}")
                     
                     if actual_balance <= 0:
-                        # 代币已不存在，清除持仓
-                        print(f"[安全检查] 代币余额为0，清除持仓记录")
-                        self.current_position = None
+                        # 代币已不存在，可能事件已结算
+                        print(f"[安全检查] 代币余额为0，检查事件是否已结算...")
+                        
+                        # 检查事件是否已结算
+                        event_result = self.get_event_result()
+                        if event_result:
+                            # 事件已结算，根据结果计算盈亏
+                            if event_result == token:
+                                exit_price = 1.0
+                                print(f"[安全检查] 事件已结算，结果 = {event_result}，持仓 {token} 获胜")
+                            else:
+                                exit_price = 0.0
+                                print(f"[安全检查] 事件已结算，结果 = {event_result}，持仓 {token} 失败")
+                            
+                            self.close_position(
+                                self.current_position["type"],
+                                position_size,
+                                entry_price,
+                                exit_price,
+                                "SETTLED"
+                            )
+                        else:
+                            # 事件未结算但代币为0，清除持仓
+                            print(f"[安全检查] 代币余额为0且事件未结算，清除持仓记录")
+                            self.current_position = None
                     elif actual_balance < position_size:
                         # 余额不足，更新持仓
                         print(f"[安全检查] 更新持仓数量: {position_size} → {actual_balance}")
                         self.current_position["size"] = actual_balance
+                        position_size = actual_balance
                 
-                # 如果仍有持仓，尝试卖出
+                # 如果仍有持仓且代币余额 > 0，检查事件是否已结算
                 if self.current_position and token_id:
-                    prices = self.client.get_market_prices(self.config.market_id)
-                    if prices:
-                        exit_price = prices.get(token, 0.5)
-                        sell_price = max(1, int(exit_price * 100) - 2)
+                    # 先检查事件是否已结算
+                    event_result = self.get_event_result()
+                    if event_result:
+                        # 事件已结算，根据结果计算盈亏
+                        if event_result == token:
+                            exit_price = 1.0
+                            print(f"[安全检查] 事件已结算，结果 = {event_result}，持仓 {token} 获胜")
+                        else:
+                            exit_price = 0.0
+                            print(f"[安全检查] 事件已结算，结果 = {event_result}，持仓 {token} 失败")
                         
-                        actual_balance = self.current_position.get("size", 0)
-                        print(f"[安全检查] 强制卖出 {token} {actual_balance}股 @ {sell_price}%")
-                        
-                        try:
-                            sell_order = self.client.create_order(
-                                token_id=token_id,
-                                price=sell_price,
-                                size=actual_balance,
-                                side="SELL",
-                                order_type="GTC",
-                            )
+                        self.close_position(
+                            self.current_position["type"],
+                            position_size,
+                            entry_price,
+                            exit_price,
+                            "SETTLED"
+                        )
+                    else:
+                        # 事件未结算，尝试卖出
+                        prices = self.client.get_market_prices(self.config.market_id)
+                        if prices:
+                            exit_price = prices.get(token, 0.5)
+                            sell_price = max(1, int(exit_price * 100) - 2)
                             
-                            if sell_order and sell_order.get("success") != False:
-                                # 等待成交
-                                order_id = sell_order.get("orderID") or sell_order.get("order_id", "")
-                                start_wait = time.time()
-                                while time.time() - start_wait < 5:
-                                    try:
-                                        order_status = self.client.get_order(order_id)
-                                        if order_status:
-                                            filled = order_status.get("filled_size", 0) or order_status.get("size_filled", 0) or 0
-                                            if filled > 0:
-                                                actual_price = order_status.get("price") or order_status.get("avg_price") or sell_price / 100.0
-                                                if isinstance(actual_price, (int, float)) and actual_price > 1:
-                                                    actual_price = actual_price / 100.0
-                                                self.close_position(
-                                                    self.current_position["type"],
-                                                    actual_balance,
-                                                    entry_price,
-                                                    actual_price,
-                                                    "FORCED_CLOSE"
-                                                )
-                                                break
-                                    except:
-                                        pass
-                                    time.sleep(0.5)
-                        except Exception as e:
-                            print(f"[安全检查] 强制卖出失败: {e}")
+                            actual_balance = self.current_position.get("size", 0)
+                            print(f"[安全检查] 强制卖出 {token} {actual_balance}股 @ {sell_price}%")
+                            
+                            try:
+                                sell_order = self.client.create_order(
+                                    token_id=token_id,
+                                    price=sell_price,
+                                    size=actual_balance,
+                                    side="SELL",
+                                    order_type="GTC",
+                                )
+                                
+                                if sell_order and sell_order.get("success") != False:
+                                    # 等待成交
+                                    order_id = sell_order.get("orderID") or sell_order.get("order_id", "")
+                                    start_wait = time.time()
+                                    while time.time() - start_wait < 5:
+                                        try:
+                                            order_status = self.client.get_order(order_id)
+                                            if order_status:
+                                                filled = order_status.get("filled_size", 0) or order_status.get("size_filled", 0) or 0
+                                                if filled > 0:
+                                                    actual_price = order_status.get("price") or order_status.get("avg_price") or sell_price / 100.0
+                                                    if isinstance(actual_price, (int, float)) and actual_price > 1:
+                                                        actual_price = actual_price / 100.0
+                                                    self.close_position(
+                                                        self.current_position["type"],
+                                                        actual_balance,
+                                                        entry_price,
+                                                        actual_price,
+                                                        "FORCED_CLOSE"
+                                                    )
+                                                    break
+                                        except:
+                                            pass
+                                        time.sleep(0.5)
+                            except Exception as e:
+                                print(f"[安全检查] 强制卖出失败: {e}")
             except Exception as e:
                 print(f"[错误] 安全检查失败: {e}")
 
@@ -1937,11 +1987,18 @@ class TradingEngine:
         elif exit_reason == "TIMEOUT":
             event_result = self.get_event_result()
             if event_result:
+                # 事件已结算，根据结果确定平仓价格
                 if event_result == token:
                     exit_price = 1.0
+                    print(f"[清算] 事件已结算，结果 = {event_result}，持仓 {token} 获胜，平仓价 = 100%")
                 else:
                     exit_price = 0.0
+                    print(f"[清算] 事件已结算，结果 = {event_result}，持仓 {token} 失败，平仓价 = 0%")
+                # 标记事件已结算，不需要卖出
+                self._event_settled = True
             else:
+                # 事件未结算，尝试获取当前价格
+                self._event_settled = False
                 try:
                     prices = self.client.get_market_prices(self.config.market_id)
                     exit_price = to_float_price(prices.get(token, entry_price)) if prices else entry_price
@@ -1950,14 +2007,24 @@ class TradingEngine:
         else:
             exit_price = entry_price
 
-        # 卖出持仓代币（如果是 TAKE_PROFIT_FILLED 则跳过）
+        # 卖出持仓代币（如果是 TAKE_PROFIT_FILLED 或事件已结算则跳过）
         sell_success = False  # 标记卖出是否成功
         
+        # 检查是否需要卖出
+        skip_sell = False
         if exit_reason == "TAKE_PROFIT_FILLED":
             trade_amount = position_size * exit_price
             print(f"[平仓] 止盈已成交 {position_size}股 @ {int(exit_price*100)}% | 金额: ${trade_amount:.2f}")
             sell_success = True
-        else:
+            skip_sell = True
+        elif exit_reason == "TIMEOUT" and getattr(self, '_event_settled', False):
+            # 事件已结算，不需要卖出，直接计算盈亏
+            trade_amount = position_size * exit_price
+            print(f"[清算] 事件已结算，直接计算盈亏: {position_size}股 @ {int(exit_price*100)}% | 金额: ${trade_amount:.2f}")
+            sell_success = True
+            skip_sell = True
+        
+        if not skip_sell:
             print(f"[平仓] 卖出 {token} {position_size}股")
             
             if token_id:
