@@ -1699,74 +1699,42 @@ class TradingEngine:
 
     def place_stop_loss_order(self, position_size: float) -> Optional[str]:
         """
-        设置止损单（卖出持仓代币）
-        
-        根据 Polymarket 官方文档：
-        - 使用 GTD 订单确保在周期结束时自动过期
-        
-        **使用限价单（GTD），不是市价单**
-        
+        设置止损（价格监控方式，不创建订单）
+
+        【重要】Polymarket 限价卖单无法实现真正的止损！
+
+        限价卖单 @ X = 以不低于 X 的价格卖出
+        - 止损应该是价格 <= 45 时触发
+        - 但限价卖单 @ 45 只会在价格 >= 45 时成交
+        - 这与止损的逻辑相反！
+
+        【解决方案】：
+        - 不创建止损订单（无意义）
+        - 使用价格监控，当价格 <= 止损价时主动卖出
+        - 在 monitor_position() 中实现
+
         Args:
             position_size: 持仓数量
-            
+
         Returns:
-            止损单订单ID 或 None
+            None（不创建订单）
         """
         if not self.current_position or not self.current_position.get("token_id"):
             return None
-        
+
         position = self.current_position
-        token_id = position["token_id"]
         token = position["token"]
-        entry_price = position["entry_price"]
         stop_loss_price = self.config.stop_loss
         stop_loss_display = stop_loss_price / 100.0 if stop_loss_price > 1 else stop_loss_price
-        
-        print(f"\n[止损] 设置止损单:")
+
+        print(f"\n[止损] 止损策略说明:")
         print(f"  代币: {token}")
-        print(f"  代币ID: {token_id[:20]}...")
-        print(f"  开仓价: {entry_price}")
-        print(f"  止损价: {stop_loss_price} → ${stop_loss_display:.2f}")
-        print(f"  卖出股数: {position_size}")
-        
-        # GTD 订单：5 分钟后自动过期（+60秒安全缓冲）
-        duration = self.config.trade_cycle_minutes * 60
-        expiration = int(time.time()) + 60 + duration
-        print(f"  过期时间: {expiration} (当前时间 + {duration + 60}秒)")
-        
-        try:
-            # 获取市场的 tick_size 和 neg_risk
-            options = self.client.get_market_options(token_id)
-            
-            # 卖出持仓代币 @ 止损价格
-            response = self.client.create_order(
-                token_id=token_id,
-                price=stop_loss_price,
-                size=position_size,
-                side="SELL",
-                order_type="GTD",  # Good Till Date - 自动过期
-                expiration=expiration,
-            )
-            
-            if response and response.get("success") != False:
-                order_id = response.get("orderID") or response.get("order_id", "")
-                if order_id:
-                    self.stop_loss_order = {
-                        "orderID": order_id,
-                        "type": "STOP_LOSS",
-                        "token": token,
-                        "price": stop_loss_price,
-                        "size": position_size,
-                    }
-                    print(f"[止损] [OK] 止损单已挂: SELL {token} @ ${stop_loss_display:.2f}, 订单ID: {order_id[:20]}...")
-                    return order_id
-            
-            print(f"[止损] [X] 止损单创建失败: {response.get('errorMsg', 'Unknown error') if response else 'Empty response'}")
-            return None
-            
-        except Exception as e:
-            print(f"[止损] [X] 止损单设置失败: {e}")
-            return None
+        print(f"  止损价: {stop_loss_price}% (${stop_loss_display:.2f})")
+        print(f"  策略: 价格监控（当价格 <= {stop_loss_price}% 时主动卖出）")
+        print(f"  说明: 限价卖单无法实现止损，使用价格监控代替")
+
+        # 不创建止损订单，返回 None
+        return None
     
     def place_take_profit_order(self, position_size: float) -> Optional[str]:
         """
@@ -1839,19 +1807,19 @@ class TradingEngine:
     def monitor_position(self, max_wait: float) -> Optional[str]:
         """
         监控持仓：止损、止盈或到期
-        
-        逻辑：
-        - 止损：持仓代币价格 ≤ 止损价格 时平仓
-        - 止盈：持仓代币价格 ≥ 止盈价格 时平仓
+
+        【策略说明】：
+        - 止损：价格监控方式，当价格 <= 止损价时主动卖出
+        - 止盈：限价卖单 + 价格监控双重保障
         - 到期：按照事件结果平仓
-        
-        根据 Polymarket 官方文档：
-        - 使用 GTD 订单确保在周期结束时自动过期
-        - 止损止盈互斥：一个触发后立即取消另一个
-        
+
+        【重要】：
+        - 止损只能通过价格监控实现（限价卖单无法实现止损）
+        - 止盈有限价卖单和价格监控双重保障
+
         Args:
             max_wait: 最大监控时间（秒）
-            
+
         Returns:
             退出原因：'STOP_LOSS', 'TAKE_PROFIT', 'TIMEOUT', 或 None
         """
@@ -1860,10 +1828,8 @@ class TradingEngine:
 
         position = self.current_position
         entry_price = position["entry_price"]
-        position_type = position["type"]
         position_size = position["size"]
         token = position.get("token", "YES")
-        token_id = position.get("token_id")
 
         stop_loss_price = self.config.stop_loss
         stop_loss_display = stop_loss_price / 100.0 if stop_loss_price > 1 else stop_loss_price
@@ -1875,60 +1841,58 @@ class TradingEngine:
 
         print(f"[监控] 持仓详情:")
         print(f"  代币: {token}")
-        print(f"  开仓价格: ${entry_price_display:.2f} (存储值: {entry_price})")
+        print(f"  开仓价格: {entry_price_display:.2f} ({int(entry_price_display*100)}%)")
         print(f"  持仓股数: {position_size}")
-        print(f"  止损价格: ${stop_loss_display:.2f} (存储值: {stop_loss_price})")
-        print(f"  止盈价格: ${take_profit_display:.2f} (存储值: {take_profit_price})")
+        print(f"  止损价格: {stop_loss_display:.2f} ({int(stop_loss_display*100)}%) - 价格监控")
+        print(f"  止盈价格: {take_profit_display:.2f} ({int(take_profit_display*100)}%) - 限价单 + 价格监控")
         print(f"  监控时长: {max_wait:.1f}秒")
 
-        # 注意：止损止盈订单已在 wait_for_execution 中设置
-        # 这里不再重复设置，只监控订单状态和价格
-
-        # 监控止损止盈订单或等待周期结束
+        # 监控止损止盈
         start_time = time.time()
-        last_price_log = 0
-        last_check_time = start_time
+        last_log_time = 0
 
-        print(f"\n[监控] 开始监控止损止盈订单...")
-        print(f"[监控] 止损: {stop_loss_display:.2f} | 止盈: {take_profit_display:.2f}")
-        
+        print(f"\n[监控] 开始监控止损止盈...")
+
         while time.time() - start_time < max_wait:
             current_time = time.time()
-            elapsed_since_last_check = current_time - last_check_time
-            
-            # 每2秒检查一次订单状态和价格（减少API调用）
-            if elapsed_since_last_check >= 2.0:
-                # 1. 检查止损订单是否成交
-                if self.stop_loss_order:
-                    try:
-                        order_id = self.stop_loss_order.get("orderID")
-                        order_status = self.client.get_order(order_id)
-                        if order_status:
-                            # 检查多个可能的填充量字段名
-                            filled = (
-                                order_status.get("filled_size", 0) or
-                                order_status.get("size_filled", 0) or
-                                order_status.get("fills", 0) or
-                                order_status.get("fill_amount", 0) or
-                                0
-                            )
-                            if filled > 0:
-                                print(f"\r\n[触发] ✓ 止损订单已成交!                      ")
-                                # 取消另一个订单
-                                if self.take_profit_order:
-                                    self._cancel_single_order(self.take_profit_order)
-                                    self.take_profit_order = None
-                                return "STOP_LOSS"
-                    except Exception:
-                        pass
 
-                # 2. 检查止盈订单是否成交
+            try:
+                # 获取当前价格
+                prices = self.client.get_market_prices(self.config.market_id)
+                if not prices:
+                    time.sleep(0.5)
+                    continue
+
+                current_price = prices.get(token, 0.5)
+
+                # 价格格式转换
+                stop_loss_price_float = stop_loss_price / 100.0 if stop_loss_price > 1 else stop_loss_price
+                take_profit_price_float = take_profit_price / 100.0 if take_profit_price > 1 else take_profit_price
+
+                # 【止损检查】价格 <= 止损价
+                if current_price <= stop_loss_price_float:
+                    print(f"\r\n[触发] ⚠️ 止损触发! {token} 价格 {current_price:.2f} <= 止损价 {stop_loss_price_float:.2f}    ")
+                    # 取消止盈订单
+                    if self.take_profit_order:
+                        self._cancel_single_order(self.take_profit_order)
+                        self.take_profit_order = None
+                    return "STOP_LOSS"
+
+                # 【止盈检查】价格 >= 止盈价
+                if current_price >= take_profit_price_float:
+                    print(f"\r\n[触发] ✓ 止盈触发! {token} 价格 {current_price:.2f} >= 止盈价 {take_profit_price_float:.2f}    ")
+                    # 取消止盈订单（如果还在）
+                    if self.take_profit_order:
+                        self._cancel_single_order(self.take_profit_order)
+                        self.take_profit_order = None
+                    return "TAKE_PROFIT"
+
+                # 【止盈订单成交检查】检查止盈订单是否已成交
                 if self.take_profit_order:
                     try:
                         order_id = self.take_profit_order.get("orderID")
                         order_status = self.client.get_order(order_id)
                         if order_status:
-                            # 检查多个可能的填充量字段名
                             filled = (
                                 order_status.get("filled_size", 0) or
                                 order_status.get("size_filled", 0) or
@@ -1938,72 +1902,23 @@ class TradingEngine:
                             )
                             if filled > 0:
                                 print(f"\r\n[触发] ✓ 止盈订单已成交!                      ")
-                                # 取消另一个订单
-                                if self.stop_loss_order:
-                                    self._cancel_single_order(self.stop_loss_order)
-                                    self.stop_loss_order = None
+                                self.take_profit_order = None
                                 return "TAKE_PROFIT"
                     except Exception:
                         pass
-                
-                # 3. 【关键修复】检查价格触发止损/止盈
-                # 限价卖单的问题：SELL @ 45 只会在价格 >= 45 时成交
-                # 所以需要主动监控价格，当价格 <= 45 时触发止损
-                try:
-                    prices = self.client.get_market_prices(self.config.market_id)
-                    if prices:
-                        current_price = prices.get(token, 0.5)
-                        
-                        # 价格格式转换（确保比较的是同一种格式）
-                        # stop_loss_price 和 take_profit_price 是美分格式（如 45, 95）
-                        # current_price 是 0-1 格式（如 0.45, 0.95）
-                        stop_loss_price_float = stop_loss_price / 100.0 if stop_loss_price > 1 else stop_loss_price
-                        take_profit_price_float = take_profit_price / 100.0 if take_profit_price > 1 else take_profit_price
-                        
-                        # 检查止损触发：价格 <= 止损价
-                        if current_price <= stop_loss_price_float:
-                            print(f"\r\n[触发] ⚠️ 价格触发止损! 当前 ${current_price:.2f} <= 止损 ${stop_loss_price_float:.2f}    ")
-                            # 取消止损止盈订单
-                            if self.stop_loss_order:
-                                self._cancel_single_order(self.stop_loss_order)
-                            if self.take_profit_order:
-                                self._cancel_single_order(self.take_profit_order)
-                            # 返回止损触发
-                            return "STOP_LOSS"
-                        
-                        # 检查止盈触发：价格 >= 止盈价
-                        if current_price >= take_profit_price_float:
-                            print(f"\r\n[触发] ✓ 价格触发止盈! 当前 ${current_price:.2f} >= 止盈 ${take_profit_price_float:.2f}    ")
-                            # 取消止损止盈订单
-                            if self.stop_loss_order:
-                                self._cancel_single_order(self.stop_loss_order)
-                            if self.take_profit_order:
-                                self._cancel_single_order(self.take_profit_order)
-                            # 返回止盈触发
-                            return "TAKE_PROFIT"
-                        
-                except Exception:
-                    pass
-                
-                last_check_time = current_time
 
-            # 每3秒更新一次价格显示（进一步减少API调用）
-            if current_time - last_price_log >= 3.0:
-                try:
-                    prices = self.client.get_market_prices(self.config.market_id)
-                    if prices:
-                        current_price = prices.get(token, entry_price)
-                    else:
-                        current_price = entry_price
-                    
+                # 每 2 秒输出一次状态
+                if current_time - last_log_time >= 2.0:
                     elapsed = int(current_time - start_time)
-                    remaining = int(max_wait - (current_time - start_time))
-                    print(f"\r[监控] 剩余{remaining}秒 | {token}: ${current_price:.2f}    ", end="", flush=True)
-                    last_price_log = current_time
-                except Exception:
-                    pass
+                    remaining = int(max_wait - elapsed)
+                    print(f"\r[监控] {token}: {current_price:.2f} | 止损{stop_loss_display:.2f} 止盈{take_profit_display:.2f} | 剩余{remaining}s    ", end="", flush=True)
+                    last_log_time = current_time
 
-            time.sleep(0.5)  # 主循环间隔0.5秒
+                time.sleep(0.5)  # 每 0.5 秒检查一次
+
+            except Exception as e:
+                print(f"\n[错误] 监控失败: {e}")
+                time.sleep(0.5)
 
         # 周期结束，未触发止损止盈
         print(f"\r[监控] 周期结束，未触发止损止盈                    ")
