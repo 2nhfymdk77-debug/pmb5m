@@ -788,7 +788,7 @@ class PolymarketClient:
             if order_type == "GTD":
                 order_type_enum = OrderType.GTD
 
-            # 提交订单（带重试）
+            # 提交订单（带重试和最小股数处理）
             max_retries = 3
             response = None
             
@@ -804,7 +804,33 @@ class PolymarketClient:
                         continue
                     break
                 except Exception as e:
-                    if "service not ready" in str(e).lower() and attempt < max_retries - 1:
+                    error_str = str(e)
+                    
+                    # 检查是否是最小股数错误
+                    if "lower than the minimum" in error_str:
+                        import re
+                        match = re.search(r'minimum:\s*(\d+)', error_str)
+                        if match:
+                            min_size = int(match.group(1))
+                            print(f"[!] 股数 {size} 小于最小值 {min_size}，调整后重试...")
+                            
+                            # 使用最小股数重新创建订单
+                            args = OrderArgs(
+                                token_id=token_id,
+                                price=api_price,
+                                size=float(min_size),
+                                side=side.upper(),
+                                expiration=expiration_time,
+                            )
+                            signed_order = self.client.create_order(args, options=options)
+                            print(f"[*] 订单已重新签名 (size={min_size})")
+                            
+                            # 重试提交
+                            response = self.client.post_order(signed_order, orderType=order_type_enum)
+                            if response and response.get("success") != False:
+                                break
+                    
+                    if "service not ready" in error_str.lower() and attempt < max_retries - 1:
                         print(f"[*] 服务未就绪，等待重试...")
                         time.sleep(2)
                         continue
