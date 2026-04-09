@@ -951,8 +951,6 @@ class PolymarketClient:
             params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
             resp = self.client.get_balance_allowance(params)
             
-            print(f"[*] 余额查询响应: {resp}")
-
             if resp and isinstance(resp, dict):
                 balance = float(resp.get("balance", 0) or 0)
                 
@@ -960,7 +958,6 @@ class PolymarketClient:
                 # 1 USDC = 10^6 微单位
                 balance = balance / 1000000
                 
-                print(f"[*] SDK 返回余额: ${balance:.2f}")
                 return balance
 
         except Exception as e:
@@ -1057,15 +1054,6 @@ class PolymarketClient:
             original_size = size
             actual_size = size
 
-            print(f"\n[下单] 参数:")
-            print(f"  token_id: {token_id[:20]}...")
-            print(f"  price: {api_price}")
-            print(f"  size: {size}")
-            print(f"  side: {side.upper()}")
-            print(f"  order_type: {order_type} (限价单)")
-            print(f"  tick_size: {tick_size}")
-            print(f"  neg_risk: {neg_risk}")
-
             # 构建订单参数
             expiration_time = expiration if order_type == "GTD" and expiration else 0
             args = OrderArgs(
@@ -1083,7 +1071,6 @@ class PolymarketClient:
 
             # 创建签名订单
             signed_order = self.client.create_order(args, options=options)
-            print(f"[*] 订单已签名")
 
             # 确定订单类型
             order_type_enum = OrderType.GTC
@@ -1155,10 +1142,7 @@ class PolymarketClient:
                 order_id = response.get("orderID") or response.get("order_id", "")
                 success = response.get("success", True) and not response.get("errorMsg")
                 
-                if success:
-                    print(f"[OK] 订单创建成功: {order_id[:20]}...")
-                    print(f"[OK] 实际下单股数: {actual_size} (原始: {original_size})")
-                else:
+                if not success:
                     print(f"[X] 订单失败: {response.get('errorMsg', 'Unknown')}")
                 
                 return {
@@ -1172,8 +1156,6 @@ class PolymarketClient:
 
         except Exception as e:
             print(f"[X] 创建订单失败: {e}")
-            import traceback
-            traceback.print_exc()
             return {"success": False, "errorMsg": str(e), "actual_size": size}
 
     def cancel_order(self, order_id: str) -> Dict[str, Any]:

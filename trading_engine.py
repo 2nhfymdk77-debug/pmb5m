@@ -376,23 +376,14 @@ class TradingEngine:
         market_slug = "Unknown"
         condition_id = self.config.market_id if self.config.market_id else "Unknown"
         
-        print(f"[诊断] 确认页 - market_id: {self.config.market_id[:30] if self.config.market_id else 'None'}...")
-        print(f"[诊断] 确认页 - market_data: {market_data}")
-        
         if self.config.market_id:
             try:
-                print(f"[诊断] 正在通过 API 获取市场详情...")
                 market_info = self.client.get_market_by_id(self.config.market_id)
-                print(f"[诊断] API 返回: {type(market_info)}")
                 if market_info:
                     market_question = market_info.get("question", "Unknown")
                     market_slug = market_info.get("slug", "Unknown")
-                    print(f"[诊断] question: {market_question[:50]}...")
-                    print(f"[诊断] slug: {market_slug}")
-                else:
-                    print(f"[诊断] market_info 为空")
-            except Exception as e:
-                print(f"[诊断] 获取市场详情失败: {e}")
+            except Exception:
+                pass
         
         print("\n" + "=" * 60)
         print("[!]  首次下单确认  [!]")
@@ -1030,16 +1021,11 @@ class TradingEngine:
         entry_price_float = entry_price / 100.0 if entry_price > 1 else entry_price
         entry_display = int(entry_price_float * 100)  # 显示为整数百分比
 
-        print(f"[调试] config.entry_price = {entry_price}")
-        print(f"[调试] entry_price_float = {entry_price_float}")
-        print(f"[调试] entry_display = {entry_display}%")
-
         # 获取当前市场价格
-        print(f"[监控] 获取当前市场价格...")
         try:
             prices = self.client.get_market_prices(
                 self.config.market_id, 
-                debug=True,
+                debug=False,  # 关闭调试输出
                 yes_token_id=self.yes_token_id,
                 no_token_id=self.no_token_id
             )
@@ -1186,7 +1172,6 @@ class TradingEngine:
 
         entry_target = self.entry_target_price
         print(f"[监控] 等待价格涨到 {int(entry_target * 100)}%")
-        print(f"[调试] entry_target = {entry_target} (应为 0.75)")
 
         start_time = time.time()
         last_log_time = 0
@@ -1206,10 +1191,6 @@ class TradingEngine:
 
                 yes_price = prices.get("YES", 0.5)
                 no_price = prices.get("NO", 0.5)
-                
-                # 调试：输出原始价格值
-                if time.time() - start_time < 2:
-                    print(f"[调试] yes_price = {yes_price}, no_price = {no_price}")
 
                 # 每 1 秒输出一次价格
                 current_time = time.time()
@@ -1750,21 +1731,7 @@ class TradingEngine:
         Returns:
             None（不创建订单）
         """
-        if not self.current_position or not self.current_position.get("token_id"):
-            return None
-
-        position = self.current_position
-        token = position["token"]
-        stop_loss_price = self.config.stop_loss
-        stop_loss_display = stop_loss_price / 100.0 if stop_loss_price > 1 else stop_loss_price
-
-        print(f"\n[止损] 止损策略说明:")
-        print(f"  代币: {token}")
-        print(f"  止损价: {stop_loss_price}% (${stop_loss_display:.2f})")
-        print(f"  策略: 价格监控（当价格 <= {stop_loss_price}% 时主动卖出）")
-        print(f"  说明: 限价卖单无法实现止损，使用价格监控代替")
-
-        # 不创建止损订单，返回 None
+        # 不创建止损订单，使用价格监控代替
         return None
     
     def place_take_profit_order(self, position_size: float) -> Optional[str]:
@@ -1792,19 +1759,11 @@ class TradingEngine:
         take_profit_price = self.config.take_profit
         take_profit_display = take_profit_price / 100.0 if take_profit_price > 1 else take_profit_price
         
-        print(f"\n[止盈] 设置止盈单:")
-        print(f"  代币: {token}")
-        print(f"  代币ID: {token_id[:20]}...")
-        print(f"  开仓价: {entry_price}")
-        print(f"  止盈价: {take_profit_price} → ${take_profit_display:.2f}")
-        print(f"  卖出股数: {position_size}")
-        
         # 检查代币余额（等待最多 10 秒）
         max_wait = 10
         actual_balance = 0
         for i in range(max_wait):
             token_balance = self.client.get_token_balance(token_id)
-            print(f"  代币余额: {token_balance} (需要: {position_size})")
             
             if token_balance >= position_size:
                 actual_balance = token_balance
@@ -1813,30 +1772,24 @@ class TradingEngine:
                 # 有余额但不足，记录实际余额
                 actual_balance = token_balance
             
-            print(f"[等待] 代币余额不足，等待 {i+1}/{max_wait} 秒...")
             time.sleep(1)
         
         # 如果余额不足，更新持仓数量为实际余额
         if actual_balance > 0 and actual_balance < position_size:
-            print(f"[警告] 代币余额 {actual_balance} < 预期 {position_size}，更新持仓数量")
             self.current_position["size"] = actual_balance
             position_size = actual_balance
         
         if actual_balance <= 0:
-            print(f"[错误] 代币余额为 0，无法设置止盈单")
             return None
         
         # Polymarket 最小股数限制
         MIN_SELL_SHARES = 5
         if position_size < MIN_SELL_SHARES:
-            print(f"[警告] 股数 {position_size:.4f} < 最小卖出股数 {MIN_SELL_SHARES}")
-            print(f"[止盈] 跳过止盈单设置，依赖价格监控触发")
             return None
         
         # GTD 订单：5 分钟后自动过期（+60秒安全缓冲）
         duration = self.config.trade_cycle_minutes * 60
         expiration = int(time.time()) + 60 + duration
-        print(f"  过期时间: {expiration} (当前时间 + {duration + 60}秒)")
         
         try:
             # 卖出持仓代币 @ 止盈价格
@@ -1859,11 +1812,9 @@ class TradingEngine:
                         "price": take_profit_price,
                         "size": position_size,
                     }
-                    print(f"[止盈] [OK] 止盈单已挂: SELL {token} @ ${take_profit_display:.2f}, 订单ID: {order_id[:20]}...")
+                    print(f"[止盈] 已挂单: {token} @ {int(take_profit_display*100)}%")
                     return order_id
             
-            error_msg = response.get('errorMsg', 'Unknown error') if response else 'Empty response'
-            print(f"[止盈] [X] 止盈单创建失败: {error_msg}")
             return None
             
         except Exception as e:
@@ -2058,11 +2009,9 @@ class TradingEngine:
             if token_id:
                 # 查询实际代币余额
                 actual_balance = self.client.get_token_balance(token_id)
-                print(f"[平仓] 代币余额: {actual_balance} (预期: {position_size})")
                 
                 # 先用实际余额更新 position_size
                 if actual_balance <= 0:
-                    print(f"[平仓] ✗ 代币余额为 0")
                     # 代币已不存在，可能是止盈订单成交或其他原因
                     # 先检查是否有记录的止盈成交价格
                     if hasattr(self, 'take_profit_filled_price') and self.take_profit_filled_price:
@@ -2070,7 +2019,6 @@ class TradingEngine:
                         if isinstance(exit_price, (int, float)) and exit_price > 1:
                             exit_price = exit_price / 100.0
                         sell_success = True
-                        print(f"[平仓] 使用止盈成交价格 @ {int(exit_price*100)}%")
                     # 再检查止盈订单是否成交
                     elif self.take_profit_order:
                         try:
@@ -2095,25 +2043,21 @@ class TradingEngine:
                                         actual_price = actual_price / 100.0
                                     exit_price = actual_price
                                     sell_success = True
-                                    print(f"[平仓] 止盈订单已成交 @ {int(exit_price*100)}%")
                         except:
                             pass
                     
                     if not sell_success:
                         # 无法确定代币去向，清除持仓但不计算盈亏
-                        print(f"[平仓] 代币可能已被卖出，清除持仓记录（不计盈亏）")
                         self.current_position = None
                     return
                 elif actual_balance < position_size:
-                    print(f"[警告] 代币余额不足，调整卖出数量: {position_size} → {actual_balance}")
                     position_size = actual_balance
                     self.current_position["size"] = actual_balance
                 
                 # 检查最小股数限制（在获取实际余额后）
                 MIN_SELL_SHARES = 5
                 if position_size < MIN_SELL_SHARES:
-                    print(f"[警告] 股数 {position_size:.4f} < 最小卖出股数 {MIN_SELL_SHARES}")
-                    print(f"[警告] 无法卖出，等待事件结算...")
+                    print(f"[警告] 股数 {position_size:.4f} < 最小卖出股数 {MIN_SELL_SHARES}，等待事件结算")
                     # 清除持仓，等待事件结算
                     self.current_position = None
                     return
@@ -2126,30 +2070,22 @@ class TradingEngine:
                         current_prices = self.client.get_market_prices(self.config.market_id)
                         current_price = current_prices.get(token, exit_price) if current_prices else exit_price
                         
-                        print(f"[平仓] 尝试 {retry+1}/{max_retries} | 当前价格: {int(current_price*100)}%")
-                        
                         # 检查是否仍满足卖出条件
                         should_sell = False
                         if exit_reason == "STOP_LOSS":
                             # 止损条件：价格 <= 止损价
                             if current_price <= to_float_price(self.config.stop_loss):
                                 should_sell = True
-                                print(f"[平仓] 仍满足止损条件 ({int(current_price*100)}% <= {self.config.stop_loss}%)")
                             else:
-                                print(f"[平仓] 价格已回升，不满足止损条件 ({int(current_price*100)}% > {self.config.stop_loss}%)")
                                 # 价格回升，返回继续监控（设置标志让外层继续监控）
-                                print(f"[平仓] 返回继续监控...")
                                 self._continue_monitoring = True
                                 return
                         elif exit_reason == "TAKE_PROFIT":
                             # 止盈条件：价格 >= 止盈价
                             if current_price >= to_float_price(self.config.take_profit):
                                 should_sell = True
-                                print(f"[平仓] 仍满足止盈条件 ({int(current_price*100)}% >= {self.config.take_profit}%)")
                             else:
-                                print(f"[平仓] 价格已回落，不满足止盈条件 ({int(current_price*100)}% < {self.config.take_profit}%)")
                                 # 价格回落，返回继续监控（设置标志让外层继续监控）
-                                print(f"[平仓] 返回继续监控...")
                                 self._continue_monitoring = True
                                 return
                         elif exit_reason == "TIMEOUT":
@@ -2163,7 +2099,6 @@ class TradingEngine:
                         
                         # 使用当前市场价格 - 2 确保成交
                         sell_price = max(1, int(current_price * 100) - 2)
-                        print(f"[平仓] 卖出价格: {sell_price}% (市场价 - 2)")
                         
                         sell_order = self.client.create_order(
                             token_id=token_id,
@@ -2212,21 +2147,17 @@ class TradingEngine:
                                 # 卖出成功，跳出重试
                                 break
                             else:
-                                print(f"[平仓] ✗ 订单未成交，准备重试...")
                                 # 取消未成交的订单
                                 try:
                                     self.client.cancel_order(order_id)
                                 except:
                                     pass
                         else:
-                            error_msg = sell_order.get('errorMsg', 'Unknown') if sell_order else 'Empty response'
-                            print(f"[平仓] ✗ 订单失败: {error_msg}")
-                            
                             # 如果是余额不足错误，重新查询余额
+                            error_msg = sell_order.get('errorMsg', '') if sell_order else ''
                             if 'balance' in error_msg.lower() or 'insufficient' in error_msg.lower():
                                 new_balance = self.client.get_token_balance(token_id)
                                 if new_balance > 0 and new_balance < position_size:
-                                    print(f"[平仓] 更新卖出数量: {position_size} → {new_balance}")
                                     position_size = new_balance
                                     self.current_position["size"] = new_balance
                     
@@ -2235,7 +2166,6 @@ class TradingEngine:
                     
                     # 重试前等待
                     if not sell_success and retry < max_retries - 1:
-                        print(f"[平仓] 等待 2 秒后重试...")
                         time.sleep(2)
         
         # 如果卖出失败，不计算盈亏（包括 TIMEOUT）
@@ -2246,7 +2176,6 @@ class TradingEngine:
                 real_balance = self.client.get_balance()
                 if real_balance is not None and real_balance >= 0:
                     self.balance = real_balance
-                    print(f"[同步] 余额已更新: ${self.balance:.2f}")
             except:
                 pass
             
@@ -2257,11 +2186,9 @@ class TradingEngine:
                     remaining_balance = self.client.get_token_balance(token_id)
                     if remaining_balance <= 0:
                         # 代币已不存在（可能被结算或卖出），清除持仓
-                        print(f"[清算] 代币余额为0，清除持仓记录")
                         self.current_position = None
                     else:
                         # 代币还有余额，保留持仓让下一个周期处理
-                        print(f"[警告] 代币仍有 {remaining_balance} 股，保留持仓等待处理")
                         # 更新持仓数量为实际余额
                         self.current_position["size"] = remaining_balance
                 else:
