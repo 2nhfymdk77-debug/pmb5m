@@ -918,30 +918,29 @@ class TradingEngine:
             yes_too_high = yes_price >= 0.90
             no_too_high = no_price >= 0.90
             
-            # 【重要】判断是否可以买入（达到目标价且价格不太高）
+            # 【重要】判断是否可以立即买入（达到目标价且价格不太高）
             can_buy_yes = yes_reached and not yes_too_high
             can_buy_no = no_reached and not no_too_high
             
             if can_buy_yes or can_buy_no:
-                # 有可交易的一方，进入监控阶段
+                # 有可交易的一方，进入监控阶段准备买入
                 self.waiting_for_entry = True
                 self.entry_target_price = entry_price_float
                 self.entry_position_size = position_size
-                print(f"[监控] {('YES' if can_buy_yes else 'NO') if can_buy_yes != can_buy_no else 'YES/NO'} 达到目标价，进入监控...")
-                return
-            elif yes_reached or no_reached:
-                # 价格达到目标但太高，不适合买入
-                print(f"\n[跳过] 价格达到目标但太高（YES={int(yes_price*100)}%, NO={int(no_price*100)}%）")
-                print(f"[跳过] 等待下一个事件...")
-                self.waiting_for_entry = False
+                print(f"[监控] {('YES' if can_buy_yes else 'NO') if can_buy_yes != can_buy_no else 'YES/NO'} 达到目标价且价格合适，进入监控...")
                 return
             else:
-                # 两边都未达到目标价，设置监控标志
-                print(f"[等待] 价格未达目标 {entry_display}%")
-                print(f"[等待] 等待价格涨到 {entry_display}% 时买入")
+                # 无论价格太高还是未达目标，都进入监控阶段
+                # 价格太高：等待价格下降
+                # 未达目标：等待价格上涨
                 self.waiting_for_entry = True
                 self.entry_target_price = entry_price_float
                 self.entry_position_size = position_size
+                
+                if yes_too_high or no_too_high:
+                    print(f"[监控] 价格太高（YES={int(yes_price*100)}%, NO={int(no_price*100)}%），继续监控等待价格下降...")
+                else:
+                    print(f"[等待] 价格未达目标 {entry_display}%，等待价格涨到目标价...")
                 return
                 
         except Exception as e:
@@ -1065,35 +1064,29 @@ class TradingEngine:
                 yes_reached = yes_price >= entry_target
                 no_reached = no_price >= entry_target
                 
-                # 【重要】如果价格已经 >= 目标价，检查价格是否太高
-                # 如果价格 >= 90%，说明价格太高，不适合买入
-                if yes_reached or no_reached:
-                    # 先检查是否有可交易的一方
-                    can_buy_yes = yes_reached and yes_price < 0.90
-                    can_buy_no = no_reached and no_price < 0.90
-                    
-                    if can_buy_yes or can_buy_no:
-                        # 价格在合理范围内，可以买入
-                        if can_buy_yes and can_buy_no:
-                            # 两边都可以买，选择价格更高的
-                            token = "YES" if yes_price > no_price else "NO"
-                            price = max(yes_price, no_price)
-                        elif can_buy_yes:
-                            token = "YES"
-                            price = yes_price
-                        else:
-                            token = "NO"
-                            price = no_price
-
-                        print(f"\n[触发] {token} 达到 {int(entry_target * 100)}%")
-                        self._execute_market_buy(token, position_size, price)
-                        return True
+                # 【重要】检查是否有可买入的一方（达到目标价且价格 < 90%）
+                can_buy_yes = yes_reached and yes_price < 0.90
+                can_buy_no = no_reached and no_price < 0.90
+                
+                if can_buy_yes or can_buy_no:
+                    # 价格在合理范围内，可以买入
+                    if can_buy_yes and can_buy_no:
+                        # 两边都可以买，选择价格更高的
+                        token = "YES" if yes_price > no_price else "NO"
+                        price = max(yes_price, no_price)
+                    elif can_buy_yes:
+                        token = "YES"
+                        price = yes_price
                     else:
-                        # 两边价格都太高，退出监控
-                        print(f"\n[跳过] 两边价格都太高（YES={int(yes_price*100)}%, NO={int(no_price*100)}%），不适合买入")
-                        print(f"[跳过] 等待下一个周期...")
-                        self.waiting_for_entry = False
-                        return False
+                        token = "NO"
+                        price = no_price
+
+                    print(f"\n[触发] {token} 达到 {int(entry_target * 100)}%，价格 {int(price*100)}%")
+                    self._execute_market_buy(token, position_size, price)
+                    return True
+                
+                # 价格太高或未达目标，继续监控
+                # 不做任何操作，让循环继续
 
                 time.sleep(0.05)
 
