@@ -2093,6 +2093,12 @@ class TradingEngine:
                         # 使用当前市场价格 - 2 确保成交
                         sell_price = max(1, int(current_price * 100) - 2)
                         
+                        # 检查订单金额是否足够（Polymarket 最小订单金额 ~$1）
+                        min_shares_needed = 1.0 / (sell_price / 100.0)  # 1美元对应的股数
+                        if position_size < min_shares_needed:
+                            print(f"[平仓] 股数不足最小金额（{position_size:.4f}股 < {min_shares_needed:.4f}股），等待事件结算")
+                            break  # 停止卖出，等待事件结算
+                        
                         sell_order = self.client.create_order(
                             token_id=token_id,
                             price=sell_price,
@@ -2144,7 +2150,16 @@ class TradingEngine:
                                 time.sleep(0.5)
                             
                             if sell_success:
-                                # 卖出成功，跳出重试
+                                # 卖出成功，检查实际剩余股数
+                                if token_id:
+                                    remaining_balance = self.client.get_token_balance(token_id)
+                                    if remaining_balance > 0.001:  # 还有剩余股数
+                                        print(f"[平仓] 剩余股数: {remaining_balance:.4f}股")
+                                        # 更新 position_size，下一次 retry 会检查是否足够卖出
+                                        position_size = remaining_balance
+                                        self.current_position["size"] = remaining_balance
+                                        # 不设置 sell_success = False，让 retry 循环自然结束
+                                # 卖出完成（或剩余股数将在下次 retry 检查）
                                 break
                             else:
                                 # 取消未成交的订单
