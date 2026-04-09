@@ -1103,24 +1103,35 @@ class PolymarketClient:
                         match = re.search(r'minimum:\s*(\d+)', error_str)
                         if match:
                             min_size = int(match.group(1))
-                            print(f"[!] 股数 {size} 小于最小值 {min_size}，调整后重试...")
-                            actual_size = float(min_size)  # 更新实际size
                             
-                            # 使用最小股数重新创建订单
-                            args = OrderArgs(
-                                token_id=token_id,
-                                price=api_price,
-                                size=float(min_size),
-                                side=side.upper(),
-                                expiration=expiration_time,
-                            )
-                            signed_order = self.client.create_order(args, options=options)
-                            print(f"[*] 订单已重新签名 (size={min_size})")
-                            
-                            # 重试提交
-                            response = self.client.post_order(signed_order, orderType=order_type_enum)
-                            if response and response.get("success") != False:
-                                break
+                            # 只有买入订单才能调整股数（卖出订单余额可能不足）
+                            if side.upper() == "BUY":
+                                print(f"[!] 买入股数 {size} 小于最小值 {min_size}，调整后重试...")
+                                actual_size = float(min_size)  # 更新实际size
+                                
+                                # 使用最小股数重新创建订单
+                                args = OrderArgs(
+                                    token_id=token_id,
+                                    price=api_price,
+                                    size=float(min_size),
+                                    side=side.upper(),
+                                    expiration=expiration_time,
+                                )
+                                signed_order = self.client.create_order(args, options=options)
+                                print(f"[*] 订单已重新签名 (size={min_size})")
+                                
+                                # 重试提交
+                                response = self.client.post_order(signed_order, orderType=order_type_enum)
+                                if response and response.get("success") != False:
+                                    break
+                            else:
+                                # 卖出订单股数不足，直接返回错误
+                                print(f"[!] 卖出股数 {size} 小于最小值 {min_size}，无法调整（余额可能不足）")
+                                return {
+                                    "success": False,
+                                    "errorMsg": f"Size ({size:.2f}) lower than minimum: {min_size}",
+                                    "actual_size": size,
+                                }
                     
                     if "service not ready" in error_str.lower() and attempt < max_retries - 1:
                         print(f"[*] 服务未就绪，等待重试...")

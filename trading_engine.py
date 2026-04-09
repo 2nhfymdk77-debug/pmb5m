@@ -1091,6 +1091,12 @@ class TradingEngine:
         if actual_size * current_price < 1.0:
             actual_size = math.ceil(1.0 / current_price)
         
+        # Polymarket 要求最小 5 股
+        MIN_SHARES = 5
+        if actual_size < MIN_SHARES:
+            actual_size = MIN_SHARES
+            print(f"[买入] 调整股数到最小值: {MIN_SHARES} 股")
+        
         try:
             # FOK 订单
             buy_price = min(current_price + 0.05, 0.99)
@@ -2025,6 +2031,15 @@ class TradingEngine:
             skip_sell = True
         
         if not skip_sell:
+            # Polymarket 最小股数限制
+            MIN_SELL_SHARES = 5
+            if position_size < MIN_SELL_SHARES:
+                print(f"[警告] 股数 {position_size:.2f} 小于最小卖出股数 {MIN_SELL_SHARES}")
+                print(f"[警告] 无法卖出，等待事件结算...")
+                # 跳过卖出，等待事件结算
+                # 不计算盈亏（保留持仓）
+                return
+            
             print(f"[平仓] 卖出 {token} {position_size}股")
             
             if token_id:
