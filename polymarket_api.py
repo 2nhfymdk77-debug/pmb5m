@@ -682,35 +682,55 @@ class PolymarketClient:
             if yes_asks and len(yes_asks) > 0:
                 # asks 按价格升序排列，第一个是最低卖价
                 best_ask = yes_asks[0]
-                price_str = best_ask.get("price", "0.5")
-                yes_price_raw = float(price_str)
-                # 调试：输出原始价格
                 if debug:
-                    print(f"[调试] YES 原始价格字符串: '{price_str}' -> 浮点数: {yes_price_raw}")
-                # 统一转换为 0-1 格式
-                if yes_price_raw > 1:
-                    yes_price = yes_price_raw / 100.0
+                    print(f"[调试] YES best_ask = {best_ask}")
+                
+                price_str = best_ask.get("price", "0.5")
+                if debug:
+                    print(f"[调试] YES 原始价格字符串: '{price_str}' (type: {type(price_str)})")
+                
+                try:
+                    yes_price_raw = float(price_str)
+                    # 统一转换为 0-1 格式
+                    if yes_price_raw > 1:
+                        yes_price = yes_price_raw / 100.0
+                        if debug:
+                            print(f"[调试] YES 价格 > 1，转换: {yes_price_raw} -> {yes_price}")
+                    else:
+                        yes_price = yes_price_raw
+                        if debug:
+                            print(f"[调试] YES 价格 <= 1，无需转换: {yes_price}")
+                except (ValueError, TypeError) as e:
                     if debug:
-                        print(f"[调试] YES 价格 > 1，转换: {yes_price_raw} -> {yes_price}")
-                else:
-                    yes_price = yes_price_raw
+                        print(f"[调试] YES 价格转换失败: {e}")
+                    yes_price = 0.5
             
             # NO 价格：最低卖价
             no_asks = no_book.get("asks", [])
             if no_asks and len(no_asks) > 0:
                 best_ask = no_asks[0]
-                price_str = best_ask.get("price", "0.5")
-                no_price_raw = float(price_str)
-                # 调试：输出原始价格
                 if debug:
-                    print(f"[调试] NO 原始价格字符串: '{price_str}' -> 浮点数: {no_price_raw}")
-                # 统一转换为 0-1 格式
-                if no_price_raw > 1:
-                    no_price = no_price_raw / 100.0
+                    print(f"[调试] NO best_ask = {best_ask}")
+                
+                price_str = best_ask.get("price", "0.5")
+                if debug:
+                    print(f"[调试] NO 原始价格字符串: '{price_str}' (type: {type(price_str)})")
+                
+                try:
+                    no_price_raw = float(price_str)
+                    # 统一转换为 0-1 格式
+                    if no_price_raw > 1:
+                        no_price = no_price_raw / 100.0
+                        if debug:
+                            print(f"[调试] NO 价格 > 1，转换: {no_price_raw} -> {no_price}")
+                    else:
+                        no_price = no_price_raw
+                        if debug:
+                            print(f"[调试] NO 价格 <= 1，无需转换: {no_price}")
+                except (ValueError, TypeError) as e:
                     if debug:
-                        print(f"[调试] NO 价格 > 1，转换: {no_price_raw} -> {no_price}")
-                else:
-                    no_price = no_price_raw
+                        print(f"[调试] NO 价格转换失败: {e}")
+                    no_price = 0.5
             
             if debug:
                 print(f"[调试] CLOB API 实时价格（最低卖价）:")
