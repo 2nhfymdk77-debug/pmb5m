@@ -1936,8 +1936,19 @@ class TradingEngine:
                             )
                             if filled > 0:
                                 print(f"\r\n[触发] ✓ 止盈订单已成交!                      ")
+                                # 【关键修复】保存实际成交价格，避免重复卖出
+                                self.take_profit_filled_price = (
+                                    order_status.get("price") or
+                                    order_status.get("avg_price") or
+                                    order_status.get("filled_price") or
+                                    order_status.get("execution_price") or
+                                    self.config.take_profit  # 默认使用止盈价格
+                                )
+                                # 如果价格是整数（美分），转换为小数
+                                if isinstance(self.take_profit_filled_price, (int, float)) and self.take_profit_filled_price > 1:
+                                    self.take_profit_filled_price = self.take_profit_filled_price / 100.0
                                 self.take_profit_order = None
-                                return "TAKE_PROFIT"
+                                return "TAKE_PROFIT_FILLED"  # 新增返回值，区分已成交的情况
                     except Exception:
                         pass
 
@@ -2004,12 +2015,20 @@ class TradingEngine:
             except:
                 exit_price = to_float_price(self.config.stop_loss)
         elif exit_reason == "TAKE_PROFIT":
-            # 止盈触发：获取当前价格卖出
+            # 止盈触发（价格监控）：获取当前价格卖出
             try:
                 prices = self.client.get_market_prices(self.config.market_id)
                 exit_price = to_float_price(prices.get(token, self.config.take_profit))
             except:
                 exit_price = to_float_price(self.config.take_profit)
+        elif exit_reason == "TAKE_PROFIT_FILLED":
+            # 【新增】止盈订单已成交：使用实际成交价格，无需再卖出
+            exit_price = getattr(self, 'take_profit_filled_price', to_float_price(self.config.take_profit))
+            if isinstance(exit_price, str):
+                exit_price = float(exit_price)
+            if exit_price > 1:
+                exit_price = exit_price / 100.0
+            print(f"\n[平仓] 止盈订单已成交，实际成交价: {exit_price:.2f}")
         elif exit_reason == "TIMEOUT":
             # 到期结算：获取事件结果
             event_result = self.get_event_result()
@@ -2039,56 +2058,86 @@ class TradingEngine:
             exit_price = entry_price  # 默认按开仓价平仓
 
         # 【关键修复】实际卖出持仓代币
-        print(f"\n[平仓] 开始执行平仓操作...")
-        print(f"  代币: {token}")
-        print(f"  平仓价格: ${exit_price:.2f}")
-        print(f"  卖出数量: {position_size} 股")
-        
-        if token_id:
-            try:
-                # 创建卖出订单（使用接近市价的价格）
-                # 对于止损/止盈，我们以当前价格附近的价格卖出
-                sell_price = int(exit_price * 100)  # 转换为美分
-                sell_order = self.client.create_order(
-                    token_id=token_id,
-                    price=sell_price,
-                    size=position_size,
-                    side="SELL",
-                    order_type="GTC",
-                )
-                
-                if sell_order and sell_order.get("success") != False:
-                    order_id = sell_order.get("orderID") or sell_order.get("order_id", "")
-                    print(f"[平仓] ✓ 卖出订单已挂: {order_id[:20] if order_id else 'N/A'}...")
+        # 注意：如果是 TAKE_PROFIT_FILLED，说明止盈订单已经成交，不需要再创建卖出订单
+        if exit_reason == "TAKE_PROFIT_FILLED":
+            print(f"\n[平仓] 止盈订单已成交，跳过创建新卖出订单")
+            print(f"  代币: {token}")
+            print(f"  实际成交价格: ${exit_price:.2f}")
+            print(f"  卖出数量: {position_size} 股")
+        else:
+            print(f"\n[平仓] 开始执行平仓操作...")
+            print(f"  代币: {token}")
+            print(f"  平仓价格: ${exit_price:.2f}")
+            print(f"  卖出数量: {position_size} 股")
+            
+            if token_id:
+                try:
+                    # 创建卖出订单（使用更低的价格确保成交）
+                    # 止损时价格可能快速下跌，使用更低的价格作为限价
+                    if exit_reason == "STOP_LOSS":
+                        # 止损：使用止损价 - 2 作为卖出价，确保能成交
+                        sell_price = max(1, int(to_float_price(self.config.stop_loss) * 100) - 2)
+                        print(f"[平仓] 止损卖出：使用价格 {sell_price} (止损价-2，确保成交)")
+                    else:
+                        # 止盈（价格监控触发）：使用当前价格
+                        sell_price = int(exit_price * 100)  # 转换为美分
                     
-                    # 等待订单成交（最多5秒）
-                    start_wait = time.time()
-                    while time.time() - start_wait < 5:
-                        try:
-                            order_status = self.client.get_order(order_id)
-                            if order_status:
-                                filled = (
-                                    order_status.get("filled_size", 0) or
-                                    order_status.get("size_filled", 0) or
-                                    order_status.get("fills", 0) or
-                                    0
-                                )
-                                if filled > 0:
-                                    print(f"[平仓] ✓ 卖出订单已成交!")
-                                    break
-                        except:
-                            pass
-                        time.sleep(0.5)
-                else:
-                    print(f"[平仓] ✗ 卖出订单创建失败: {sell_order.get('errorMsg', 'Unknown') if sell_order else 'Empty'}")
-            except Exception as e:
-                print(f"[平仓] ✗ 卖出操作失败: {e}")
+                    sell_order = self.client.create_order(
+                        token_id=token_id,
+                        price=sell_price,
+                        size=position_size,
+                        side="SELL",
+                        order_type="GTC",
+                    )
+                    
+                    if sell_order and sell_order.get("success") != False:
+                        order_id = sell_order.get("orderID") or sell_order.get("order_id", "")
+                        print(f"[平仓] ✓ 卖出订单已挂: {order_id[:20] if order_id else 'N/A'}...")
+                        
+                        # 等待订单成交（最多10秒，增加等待时间）
+                        start_wait = time.time()
+                        while time.time() - start_wait < 10:
+                            try:
+                                order_status = self.client.get_order(order_id)
+                                if order_status:
+                                    filled = (
+                                        order_status.get("filled_size", 0) or
+                                        order_status.get("size_filled", 0) or
+                                        order_status.get("fills", 0) or
+                                        0
+                                    )
+                                    if filled > 0:
+                                        # 获取实际成交价格
+                                        actual_price = (
+                                            order_status.get("price") or
+                                            order_status.get("avg_price") or
+                                            order_status.get("filled_price") or
+                                            sell_price / 100.0
+                                        )
+                                        if isinstance(actual_price, (int, float)) and actual_price > 1:
+                                            actual_price = actual_price / 100.0
+                                        print(f"[平仓] ✓ 卖出订单已成交! 实际成交价: {actual_price:.2f}")
+                                        # 更新平仓价格为实际成交价格
+                                        exit_price = actual_price
+                                        break
+                            except:
+                                pass
+                            time.sleep(0.5)
+                        else:
+                            print(f"[平仓] ⚠️ 订单未在10秒内成交，订单ID: {order_id[:20] if order_id else 'N/A'}...")
+                            # 订单可能稍后成交，记录订单ID
+                            if order_id:
+                                print(f"[平仓] 订单已挂单，等待后续成交...")
+                    else:
+                        print(f"[平仓] ✗ 卖出订单创建失败: {sell_order.get('errorMsg', 'Unknown') if sell_order else 'Empty'}")
+                except Exception as e:
+                    print(f"[平仓] ✗ 卖出操作失败: {e}")
 
         # 平仓（更新余额和记录）
         self.close_position(position_type, position_size, entry_price, exit_price, exit_reason)
 
         # 结算后重新同步真实余额（止损/止盈是实时结算，TIMEOUT需要等事件结算）
-        if exit_reason in ["STOP_LOSS", "TAKE_PROFIT"]:
+        if exit_reason in ["STOP_LOSS", "TAKE_PROFIT", "TAKE_PROFIT_FILLED"]:
             # 止损止盈是实时结算，延迟1秒后同步
             time.sleep(1)
             try:
