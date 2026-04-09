@@ -970,23 +970,18 @@ class TradingEngine:
         - 订单金额 = 价格 × size
         - 最小订单金额 = $1
         
-        重要：Polymarket 订单最小金额为 $1
-        - 订单金额 = 价格 × 数量
-        - 如果价格 0.75，数量至少需要 2（金额 $1.5）
+        【重要】限价单成交逻辑：
+        - 限价买单 @ 75：等待市场价格涨到 75 时成交
+        - 不是"市场价格 <= 75 就成交"！
+        - 哪一边价格先涨到 75，哪一边就先成交
+        - 成交后取消另一侧订单
         
-        【重要】策略逻辑：
+        【策略设计】：
         - YES 和 NO 是两个不同的代币
-        - YES价格 + NO价格 = 100（或接近100）
-        - 如果当前价格：YES=50, NO=50，挂单价格=75
-        - 那么两个订单都会成交（因为市价50 < 挂单75）
-        
-        【修复】先检查市场价格，只在合适的价格挂单：
-        - 如果 YES价格 < 挂单价格，YES订单会成交
-        - 如果 NO价格 < 挂单价格，NO订单会成交
-        - 如果两个价格都 < 挂单价格，两个都会成交（问题！）
-        
-        解决方案：只挂价格 > 挂单价格的一侧
-        或者：调整挂单价格，确保只有一个订单会成交
+        - YES价格 + NO价格 ≈ 100
+        - 如果 YES 涨到 75，买入 YES
+        - 如果 NO 涨到 75，买入 NO
+        - 然后设置止损 @ 45，止盈 @ 95
 
         注意：这里没有做空操作，都是做多！
         """
@@ -995,55 +990,46 @@ class TradingEngine:
         entry_price_float = entry_price / 100.0 if entry_price > 1 else entry_price
         entry_display = entry_price_float
 
-        # 【关键检查】获取当前市场价格
+        # 获取当前市场价格（用于诊断）
         print(f"[挂单] 获取当前市场价格...")
         try:
             prices = self.client.get_market_prices(self.config.market_id)
-            if not prices:
-                print("[错误] 无法获取市场价格")
-                return
-            
-            yes_price = prices.get("YES", 0.5)
-            no_price = prices.get("NO", 0.5)
-            
-            print(f"[挂单] 当前市场价格: YES=${yes_price:.2f}, NO=${no_price:.2f}")
-            print(f"[挂单] 挂单价格: ${entry_display:.2f}")
-            
-            # 【关键修复】检查两个订单是否都会成交
-            # 限价买单成交条件：市场价格 <= 挂单价格
-            yes_will_fill = yes_price <= entry_price_float
-            no_will_fill = no_price <= entry_price_float
-            
-            print(f"[挂单] 预判成交: YES={yes_will_fill}, NO={no_will_fill}")
-            
-            if yes_will_fill and no_will_fill:
-                # 【问题】两个订单都会成交！
-                print(f"\n[警告] 两个订单都会成交！YES=${yes_price:.2f}, NO=${no_price:.2f} <= 挂单${entry_display:.2f}")
-                print(f"[警告] 这将导致同时持有 YES 和 NO，违背策略设计！")
+            if prices:
+                yes_price = prices.get("YES", 0.5)
+                no_price = prices.get("NO", 0.5)
+                print(f"[挂单] 当前市场价格: YES=${yes_price:.2f}, NO=${no_price:.2f}")
+                print(f"[挂单] 挂单价格: ${entry_display:.2f}")
                 
-                # 【解决方案1】选择价格更优的一侧挂单
-                # 价格更低的一方更可能盈利
-                if yes_price < no_price:
-                    # YES 价格更低，只挂 YES
-                    print(f"[策略] 选择只挂 YES 单（价格更低）")
-                    self._place_single_order("YES", position_size, entry_price, entry_price_float)
+                # 【关键检查】限价买单成交条件：挂单价格 >= 市场卖一价
+                # 如果挂单价格高于市场价格，订单会立即成交
+                yes_will_fill_now = entry_price_float >= yes_price
+                no_will_fill_now = entry_price_float >= no_price
+                
+                print(f"[挂单] 预判立即成交: YES={yes_will_fill_now} ({entry_display:.2f}>={yes_price:.2f}), NO={no_will_fill_now} ({entry_display:.2f}>={no_price:.2f})")
+                
+                if yes_will_fill_now and no_will_fill_now:
+                    # 【警告】两个订单都会立即成交！
+                    print(f"\n[警告] 两个订单都会立即成交！")
+                    print(f"[警告] 挂单价 ${entry_display:.2f} >= YES ${yes_price:.2f} 且 >= NO ${no_price:.2f}")
+                    print(f"[警告] 这将导致同时持有 YES 和 NO！")
+                    
+                    # 【策略选择】选择价格更优的一方
+                    # 价格更低的一方有更大的上涨空间
+                    if yes_price < no_price:
+                        print(f"[策略] 选择只挂 YES（价格更低，上涨空间更大）")
+                        self._place_single_order("YES", position_size, entry_price, entry_price_float, yes_price)
+                    else:
+                        print(f"[策略] 选择只挂 NO（价格更低或相等，上涨空间更大）")
+                        self._place_single_order("NO", position_size, entry_price, entry_price_float, no_price)
+                    return
+                elif yes_will_fill_now:
+                    print(f"[挂单] 只有 YES 会立即成交，挂单等待...")
+                elif no_will_fill_now:
+                    print(f"[挂单] 只有 NO 会立即成交，挂单等待...")
                 else:
-                    # NO 价格更低或相等，只挂 NO
-                    print(f"[策略] 选择只挂 NO 单（价格更低或相等）")
-                    self._place_single_order("NO", position_size, entry_price, entry_price_float)
-                return
-            
-            # 【正常情况】只有一个订单会成交
-            if yes_will_fill:
-                print(f"[挂单] 只有 YES 会成交")
-            elif no_will_fill:
-                print(f"[挂单] 只有 NO 会成交")
-            else:
-                # 两个都不会立即成交，正常挂双单等待
-                print(f"[挂单] 两个订单都不会立即成交，正常挂双单等待")
-                
+                    print(f"[挂单] 两个订单都不会立即成交，等待价格涨到 ${entry_display:.2f}")
         except Exception as e:
-            print(f"[警告] 无法检查市场价格，继续挂双单: {e}")
+            print(f"[警告] 无法获取市场价格: {e}")
 
         # 计算实际数量（股数）
         # Polymarket 订单金额 = 价格 × 数量
@@ -1147,30 +1133,35 @@ class TradingEngine:
             print(f"[挂单] [X] 挂单失败: {e}")
             import traceback
             traceback.print_exc()
-    
-    def _place_single_order(self, token: str, position_size: float, entry_price: float, entry_price_float: float) -> None:
+
+    def _place_single_order(self, token: str, position_size: float, entry_price: float, entry_price_float: float, expected_price: float) -> None:
         """挂单个订单（避免双持仓风险）
+        
+        当检测到两个订单都会立即成交时，只挂价格更优的一方。
         
         Args:
             token: 代币类型 ("YES" 或 "NO")
             position_size: 开仓金额
             entry_price: 挂单价格（美分）
             entry_price_float: 挂单价格（0-1格式）
+            expected_price: 预期成交价格（当前市场价格）
         """
         import math
         
         # 计算股数
-        raw_size = position_size / entry_price_float
+        raw_size = position_size / expected_price  # 使用预期成交价格计算
         actual_size = math.ceil(raw_size)
-        order_value = actual_size * entry_price_float
+        order_value = actual_size * expected_price
         if order_value < 1.0:
-            actual_size = math.ceil(1.0 / entry_price_float)
+            actual_size = math.ceil(1.0 / expected_price)
         
         token_id = self.yes_token_id if token == "YES" else self.no_token_id
-        entry_display = entry_price_float
         
-        print(f"[挂单] 只挂 {token} 单 @ ${entry_display:.2f}")
-        print(f"[挂单] 开仓金额: ${position_size:.2f}, 股数: {actual_size}")
+        print(f"\n[单边挂单] 只挂 {token} 单")
+        print(f"  挂单价格: ${entry_price_float:.2f} (限价)")
+        print(f"  预期成交价: ${expected_price:.2f} (当前市价)")
+        print(f"  开仓金额: ${position_size:.2f}")
+        print(f"  股数: {actual_size}")
         
         try:
             order = self.client.create_order(
@@ -1188,15 +1179,16 @@ class TradingEngine:
                     "type": "LONG",
                     "token": token,
                     "token_id": token_id,
-                    "price": entry_price,
+                    "price": entry_price,  # 记录挂单价格
+                    "expected_price": expected_price,  # 记录预期成交价格
                     "size": actual_size,
                 }
-                print(f"[挂单] [OK] {token} 限价单已挂: @ ${entry_display:.2f}, 订单ID: {order_id[:20]}...")
+                print(f"[单边挂单] [OK] {token} 限价单已挂，预期成交价: ${expected_price:.2f}")
             else:
-                print(f"[挂单] [X] {token} 订单创建失败")
+                print(f"[单边挂单] [X] {token} 订单创建失败: {order.get('errorMsg', 'Unknown')}")
                 
         except Exception as e:
-            print(f"[挂单] [X] 挂单失败: {e}")
+            print(f"[单边挂单] [X] 挂单失败: {e}")
 
     def _cancel_pending_orders(self) -> None:
         """取消所有挂单"""
