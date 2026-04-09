@@ -1202,31 +1202,56 @@ class TradingEngine:
                 print(f"  开仓价: {order_info['price']}")
                 print(f"  股数: {order_info['size']}")
 
-                # 【关键环节1】立即取消另一侧订单
-                print(f"\n[极速操作] 正在取消另一侧订单...")
-                for other_order_id, other_order_info in list(self.pending_orders.items()):
-                    if other_order_id != order_id:
-                        self._cancel_single_order(other_order_info)
-                        if other_order_id in self.pending_orders:
-                            del self.pending_orders[other_order_id]
-                        break
+                # 【极速优化】并行执行：取消另一侧 + 设置止损止盈
+                print(f"\n[极速操作] 并行执行：取消另一侧 + 设置止损止盈...")
                 
-                # 【关键环节2 + 优化】并行设置止损止盈
-                print(f"\n[极速操作] 正在并行设置止损止盈订单...")
+                # 准备止损止盈参数
                 self.stop_loss_order = None
                 self.take_profit_order = None
                 
-                stop_loss_result, take_profit_result = self._place_stop_take_parallel(order_info['size'])
-                
-                if stop_loss_result:
-                    print(f"[极速操作] ✓ 止损单设置成功: {stop_loss_result[:20]}...")
-                else:
-                    print(f"[极速操作] ✗ 止损单设置失败！")
-                
-                if take_profit_result:
-                    print(f"[极速操作] ✓ 止盈单设置成功: {take_profit_result[:20]}...")
-                else:
-                    print(f"[极速操作] ✗ 止盈单设置失败！")
+                # 使用线程池并行执行所有操作
+                with ThreadPoolExecutor(max_workers=3) as executor:
+                    # 任务1：取消另一侧订单
+                    cancel_futures = []
+                    for other_order_id, other_order_info in list(self.pending_orders.items()):
+                        if other_order_id != order_id:
+                            cancel_future = executor.submit(self._cancel_single_order, other_order_info)
+                            cancel_futures.append((other_order_id, cancel_future))
+                            break  # 只有一个另一侧订单
+                    
+                    # 任务2&3：并行设置止损止盈
+                    stop_future = executor.submit(self.place_stop_loss_order, order_info['size'])
+                    take_future = executor.submit(self.place_take_profit_order, order_info['size'])
+                    
+                    # 等待取消订单结果
+                    for other_order_id, cancel_future in cancel_futures:
+                        try:
+                            cancel_future.result(timeout=3)
+                            if other_order_id in self.pending_orders:
+                                del self.pending_orders[other_order_id]
+                        except Exception as e:
+                            self.logger.error(f"取消订单失败: {e}")
+                    
+                    # 等待止损止盈结果
+                    try:
+                        stop_loss_result = stop_future.result(timeout=5)
+                        if stop_loss_result:
+                            print(f"[极速操作] ✓ 止损单设置成功: {stop_loss_result[:20]}...")
+                        else:
+                            print(f"[极速操作] ✗ 止损单设置失败！")
+                    except Exception as e:
+                        self.logger.error(f"止损单设置失败: {e}")
+                        stop_loss_result = None
+                    
+                    try:
+                        take_profit_result = take_future.result(timeout=5)
+                        if take_profit_result:
+                            print(f"[极速操作] ✓ 止盈单设置成功: {take_profit_result[:20]}...")
+                        else:
+                            print(f"[极速操作] ✗ 止盈单设置失败！")
+                    except Exception as e:
+                        self.logger.error(f"止盈单设置失败: {e}")
+                        take_profit_result = None
                 
                 # 清除已成交的订单
                 self.pending_orders.clear()
