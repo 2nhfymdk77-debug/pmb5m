@@ -1781,6 +1781,94 @@ class TradingEngine:
         self.stop_loss_order = None
         self.take_profit_order = None
 
+        # 【新增】交易结束后输出实时统计
+        self._print_trade_summary(trade_record)
+
+    def _print_trade_summary(self, last_trade: TradeRecord) -> None:
+        """
+        输出实时交易情况统计（每次交易结束后）
+        
+        Args:
+            last_trade: 刚刚完成的交易记录
+        """
+        stats = self.trade_history.get_statistics()
+        
+        print("\n" + "=" * 60)
+        print("📊 实时交易统计")
+        print("=" * 60)
+        
+        # 本次交易信息
+        print("【本次交易】")
+        print(f"  代币: {last_trade.token}")
+        print(f"  方向: 做多")
+        print(f"  开仓价: ${last_trade.entry_price:.2f}")
+        print(f"  平仓价: ${last_trade.exit_price:.2f}")
+        print(f"  持仓量: {last_trade.position_size} 股")
+        
+        # 盈亏显示（带颜色）
+        pnl = last_trade.pnl
+        if pnl >= 0:
+            print(f"  盈亏: ${pnl:+.2f} ✅")
+        else:
+            print(f"  盈亏: ${pnl:+.2f} ❌")
+        
+        # 退出原因
+        exit_reason_map = {
+            "STOP_LOSS": "止损触发",
+            "TAKE_PROFIT": "止盈触发",
+            "TIMEOUT": "周期到期",
+            "FORCED_CLOSE": "强制平仓"
+        }
+        print(f"  退出原因: {exit_reason_map.get(last_trade.exit_reason, last_trade.exit_reason)}")
+        print(f"  时间: {last_trade.timestamp}")
+        
+        print("-" * 60)
+        
+        # 累计统计
+        print("【累计统计】")
+        print(f"  总交易次数: {stats['total_trades']} 次")
+        print(f"  盈利次数: {stats['win_trades']} 次 ✅")
+        print(f"  亏损次数: {stats['loss_trades']} 次 ❌")
+        
+        # 胜率（带颜色）
+        win_rate = stats['win_rate']
+        if win_rate >= 50:
+            print(f"  胜率: {win_rate:.2f}% ✅")
+        else:
+            print(f"  胜率: {win_rate:.2f}% ❌")
+        
+        # 总盈亏（带颜色）
+        total_profit = stats['total_profit']
+        if total_profit >= 0:
+            print(f"  总盈亏: ${total_profit:+.2f} ✅")
+        else:
+            print(f"  总盈亏: ${total_profit:+.2f} ❌")
+        
+        print("-" * 60)
+        
+        # 账户余额
+        print("【账户余额】")
+        print(f"  交易前: ${last_trade.balance_before:.2f}")
+        print(f"  交易后: ${last_trade.balance_after:.2f}")
+        
+        # 余额变化（带颜色）
+        balance_change = last_trade.balance_after - last_trade.balance_before
+        if balance_change >= 0:
+            print(f"  变化: ${balance_change:+.2f} ✅")
+        else:
+            print(f"  变化: ${balance_change:+.2f} ❌")
+        
+        # 相对初始余额的变化
+        if self.initial_balance > 0:
+            total_return = ((last_trade.balance_after - self.initial_balance) / self.initial_balance) * 100
+            if total_return >= 0:
+                print(f"  总收益率: {total_return:+.2f}% ✅")
+            else:
+                print(f"  总收益率: {total_return:+.2f}% ❌")
+        
+        print("=" * 60)
+        print()
+
     def log_statistics(self) -> None:
         """输出统计信息（包含 API 使用统计）"""
         stats = self.trade_history.get_statistics()
