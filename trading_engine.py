@@ -502,22 +502,75 @@ class TradingEngine:
         if self.pending_orders:
             self._cancel_pending_orders()
         
-        # 安全检查：如果还有持仓，先平仓（可能是上周期异常）
+        # 安全检查：如果还有持仓，先检查代币余额并处理
         if self.current_position:
             try:
-                prices = self.client.get_market_prices(self.config.market_id)
-                if prices:
-                    token = self.current_position.get("token", "YES")
-                    exit_price = prices.get(token, 0.5)
-                    self.close_position(
-                        self.current_position["type"],
-                        self.current_position["size"],
-                        self.current_position["entry_price"],
-                        exit_price,
-                        "FORCED_CLOSE"
-                    )
+                token = self.current_position.get("token", "YES")
+                token_id = self.current_position.get("token_id")
+                position_size = self.current_position.get("size", 0)
+                entry_price = self.current_position["entry_price"]
+                
+                # 检查代币余额
+                if token_id:
+                    actual_balance = self.client.get_token_balance(token_id)
+                    print(f"[安全检查] 上周期持仓: {token} {position_size}股 | 代币余额: {actual_balance}")
+                    
+                    if actual_balance <= 0:
+                        # 代币已不存在，清除持仓
+                        print(f"[安全检查] 代币余额为0，清除持仓记录")
+                        self.current_position = None
+                    elif actual_balance < position_size:
+                        # 余额不足，更新持仓
+                        print(f"[安全检查] 更新持仓数量: {position_size} → {actual_balance}")
+                        self.current_position["size"] = actual_balance
+                
+                # 如果仍有持仓，尝试卖出
+                if self.current_position and token_id:
+                    prices = self.client.get_market_prices(self.config.market_id)
+                    if prices:
+                        exit_price = prices.get(token, 0.5)
+                        sell_price = max(1, int(exit_price * 100) - 2)
+                        
+                        actual_balance = self.current_position.get("size", 0)
+                        print(f"[安全检查] 强制卖出 {token} {actual_balance}股 @ {sell_price}%")
+                        
+                        try:
+                            sell_order = self.client.create_order(
+                                token_id=token_id,
+                                price=sell_price,
+                                size=actual_balance,
+                                side="SELL",
+                                order_type="GTC",
+                            )
+                            
+                            if sell_order and sell_order.get("success") != False:
+                                # 等待成交
+                                order_id = sell_order.get("orderID") or sell_order.get("order_id", "")
+                                start_wait = time.time()
+                                while time.time() - start_wait < 5:
+                                    try:
+                                        order_status = self.client.get_order(order_id)
+                                        if order_status:
+                                            filled = order_status.get("filled_size", 0) or order_status.get("size_filled", 0) or 0
+                                            if filled > 0:
+                                                actual_price = order_status.get("price") or order_status.get("avg_price") or sell_price / 100.0
+                                                if isinstance(actual_price, (int, float)) and actual_price > 1:
+                                                    actual_price = actual_price / 100.0
+                                                self.close_position(
+                                                    self.current_position["type"],
+                                                    actual_balance,
+                                                    entry_price,
+                                                    actual_price,
+                                                    "FORCED_CLOSE"
+                                                )
+                                                break
+                                    except:
+                                        pass
+                                    time.sleep(0.5)
+                        except Exception as e:
+                            print(f"[安全检查] 强制卖出失败: {e}")
             except Exception as e:
-                print(f"[错误] 强制平仓失败: {e}")
+                print(f"[错误] 安全检查失败: {e}")
 
         self.cycle_start_time = datetime.now()
         cycle_start = time.time()
@@ -1453,25 +1506,25 @@ class TradingEngine:
                 print(f"  代币: {token}")
                 print(f"  挂单价格: {order_info['price']} (美分单位)")
                 print(f"  实际成交价: {actual_entry_price} (美分单位)")
-                print(f"  成交股数: {filled}")
-                print(f"  记录股数: {order_info['size']}")
+                print(f"  实际成交股数: {filled}")
+                print(f"  订单股数: {order_info['size']}")
                 print()
 
-                # 设置当前持仓（使用实际成交价格）
+                # 设置当前持仓（使用实际成交价格和数量）
                 token_id = order_info.get("token_id")
                 self.current_position = {
                     "type": "LONG",
                     "token": token,
                     "token_id": token_id,
                     "entry_price": actual_entry_price,  # 使用实际成交价格
-                    "size": order_info["size"],
+                    "size": filled,  # 使用实际成交数量
                     "timestamp": datetime.now(),
                 }
                 
                 print(f"[成交] 持仓已记录:")
                 print(f"  代币: {token}")
                 print(f"  开仓价: {actual_entry_price} (实际成交价)")
-                print(f"  股数: {order_info['size']}")
+                print(f"  股数: {filled} (实际成交)")
 
                 # 【极速优化】并行执行：取消另一侧 + 设置止损止盈
                 print(f"\n[极速操作] 并行执行：取消另一侧 + 设置止损止盈...")
@@ -1913,7 +1966,41 @@ class TradingEngine:
                 print(f"[平仓] 代币余额: {actual_balance} (预期: {position_size})")
                 
                 if actual_balance <= 0:
-                    print(f"[平仓] ✗ 代币余额为 0，无法卖出")
+                    print(f"[平仓] ✗ 代币余额为 0")
+                    # 代币已不存在，可能是止盈订单成交或其他原因
+                    # 检查止盈订单是否成交
+                    if self.take_profit_order:
+                        try:
+                            order_id = self.take_profit_order.get("orderID")
+                            order_status = self.client.get_order(order_id)
+                            if order_status:
+                                filled = (
+                                    order_status.get("filled_size", 0) or
+                                    order_status.get("size_filled", 0) or
+                                    order_status.get("fills", 0) or
+                                    0
+                                )
+                                if filled > 0:
+                                    # 止盈订单成交了，使用实际成交价格
+                                    actual_price = (
+                                        order_status.get("price") or
+                                        order_status.get("avg_price") or
+                                        order_status.get("filled_price") or
+                                        self.config.take_profit
+                                    )
+                                    if isinstance(actual_price, (int, float)) and actual_price > 1:
+                                        actual_price = actual_price / 100.0
+                                    exit_price = actual_price
+                                    sell_success = True
+                                    print(f"[平仓] 止盈订单已成交 @ {int(exit_price*100)}%")
+                        except:
+                            pass
+                    
+                    if not sell_success:
+                        # 无法确定代币去向，清除持仓但不计算盈亏
+                        print(f"[平仓] 代币可能已被卖出，清除持仓记录（不计盈亏）")
+                        self.current_position = None
+                        return
                 elif actual_balance < position_size:
                     print(f"[警告] 代币余额不足，调整卖出数量: {position_size} → {actual_balance}")
                     position_size = actual_balance
