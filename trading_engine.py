@@ -1543,9 +1543,9 @@ class TradingEngine:
                             cancel_futures.append((other_order_id, cancel_future))
                             break  # 只有一个另一侧订单
                     
-                    # 任务2&3：并行设置止损止盈
-                    stop_future = executor.submit(self.place_stop_loss_order, order_info['size'])
-                    take_future = executor.submit(self.place_take_profit_order, order_info['size'])
+                    # 任务2&3：并行设置止损止盈（使用实际成交股数）
+                    stop_future = executor.submit(self.place_stop_loss_order, filled)
+                    take_future = executor.submit(self.place_take_profit_order, filled)
                     
                     # 等待取消订单结果
                     for other_order_id, cancel_future in cancel_futures:
@@ -1968,8 +1968,15 @@ class TradingEngine:
                 if actual_balance <= 0:
                     print(f"[平仓] ✗ 代币余额为 0")
                     # 代币已不存在，可能是止盈订单成交或其他原因
-                    # 检查止盈订单是否成交
-                    if self.take_profit_order:
+                    # 先检查是否有记录的止盈成交价格
+                    if hasattr(self, 'take_profit_filled_price') and self.take_profit_filled_price:
+                        exit_price = self.take_profit_filled_price
+                        if isinstance(exit_price, (int, float)) and exit_price > 1:
+                            exit_price = exit_price / 100.0
+                        sell_success = True
+                        print(f"[平仓] 使用止盈成交价格 @ {int(exit_price*100)}%")
+                    # 再检查止盈订单是否成交
+                    elif self.take_profit_order:
                         try:
                             order_id = self.take_profit_order.get("orderID")
                             order_status = self.client.get_order(order_id)
@@ -2138,9 +2145,23 @@ class TradingEngine:
                     print(f"[同步] 余额已更新: ${self.balance:.2f}")
             except:
                 pass
-            # 清除持仓记录（卖出失败但周期结束）
+            
+            # TIMEOUT 时的特殊处理
             if exit_reason == "TIMEOUT":
-                self.current_position = None
+                # 检查代币是否还有余额
+                if token_id:
+                    remaining_balance = self.client.get_token_balance(token_id)
+                    if remaining_balance <= 0:
+                        # 代币已不存在（可能被结算或卖出），清除持仓
+                        print(f"[清算] 代币余额为0，清除持仓记录")
+                        self.current_position = None
+                    else:
+                        # 代币还有余额，保留持仓让下一个周期处理
+                        print(f"[警告] 代币仍有 {remaining_balance} 股，保留持仓等待处理")
+                        # 更新持仓数量为实际余额
+                        self.current_position["size"] = remaining_balance
+                else:
+                    self.current_position = None
             return
 
         # 更新余额和记录（仅卖出成功时）
