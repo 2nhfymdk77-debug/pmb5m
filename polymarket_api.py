@@ -675,8 +675,15 @@ class PolymarketClient:
                         resp = requests.get(url, timeout=5)
                         if resp.status_code == 200:
                             return (name, resp.json())
-                    except:
-                        pass
+                        else:
+                            if debug:
+                                print(f"[调试] {name} 订单簿响应失败: {resp.status_code}")
+                    except requests.exceptions.Timeout:
+                        if debug:
+                            print(f"[调试] {name} 订单簿请求超时")
+                    except Exception as e:
+                        if debug:
+                            print(f"[调试] {name} 订单簿请求失败: {e}")
                     return (name, None)
                 
                 yes_book = None
@@ -687,17 +694,27 @@ class PolymarketClient:
                         executor.submit(fetch_orderbook, yes_url, "YES"): "YES",
                         executor.submit(fetch_orderbook, no_url, "NO"): "NO",
                     }
-                    for future in as_completed(futures):
-                        name, result = future.result()
-                        if name == "YES":
-                            yes_book = result
-                        else:
-                            no_book = result
+                    for future in as_completed(futures, timeout=10):
+                        try:
+                            name, result = future.result()
+                            if name == "YES":
+                                yes_book = result
+                            else:
+                                no_book = result
+                        except Exception as e:
+                            if debug:
+                                print(f"[调试] 获取订单簿异常: {e}")
                 
                 if not yes_book or not no_book:
                     if debug:
-                        print(f"[调试] CLOB API 响应失败")
-                    return None
+                        print(f"[调试] CLOB API 响应不完整: YES={'有' if yes_book else '无'}, NO={'有' if no_book else '无'}")
+                    # 如果只有一个订单簿失败，可以尝试使用另一个推算价格
+                    if yes_book and not no_book:
+                        no_book = {"asks": [], "bids": []}  # 空订单簿，后面会使用 YES 价格推算
+                    elif no_book and not yes_book:
+                        yes_book = {"asks": [], "bids": []}  # 空订单簿，后面会使用 NO 价格推算
+                    else:
+                        return None
                 
                 # 输出原始订单簿数据样本（用于诊断）
                 if debug and retry == 0:

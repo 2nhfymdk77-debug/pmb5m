@@ -1874,25 +1874,8 @@ class TradingEngine:
             else:
                 current_price = entry_price
         
-        # 检查是否需要卖出
-        skip_sell = False
+        # 初始化 exit_price
         exit_price = current_price
-        
-        if exit_reason == "TIMEOUT":
-            event_result = self.get_event_result()
-            if event_result:
-                # 事件已结算，根据结果确定平仓价格
-                if event_result == token:
-                    exit_price = 1.0
-                    print(f"[清算] 事件已结算，结果 = {event_result}，持仓 {token} 获胜，平仓价 = 100%")
-                else:
-                    exit_price = 0.0
-                    print(f"[清算] 事件已结算，结果 = {event_result}，持仓 {token} 失败，平仓价 = 0%")
-                # 直接计算盈亏，不需要卖出
-                trade_amount = position_size * exit_price
-                print(f"[清算] 直接计算盈亏: {position_size:.4f}股 @ {int(exit_price*100)}% | 金额: ${trade_amount:.2f}")
-                self.close_position(token, position_size, entry_price, exit_price, "SETTLED")
-                return
         
         # 检查订单金额是否足够（Polymarket 最小订单金额 ~$1）
         sell_price = max(1, int(current_price * 100) - 2)
@@ -1907,27 +1890,42 @@ class TradingEngine:
         # 执行卖出
         sell_success = False
         max_retries = 3
+        total_sold = 0.0  # 累计卖出股数
+        total_amount = 0.0  # 累计卖出金额
+        final_exit_price = exit_price  # 最终平仓价
         
-        for retry in range(max_retries):
+        # 使用 while 循环处理剩余股数
+        remaining_to_sell = position_size
+        retry_count = 0
+        
+        while remaining_to_sell > 0 and retry_count < max_retries:
             try:
-                # 每次重试前重新查询余额（确保使用最新值）
-                if token_id and retry > 0:
-                    new_balance = self.client.get_token_balance(token_id)
-                    if new_balance > 0 and new_balance < position_size:
-                        position_size = new_balance
-                        print(f"[平仓] 重新查询余额: {position_size:.4f}股")
+                # 查询当前余额
+                if token_id:
+                    actual_balance = self.client.get_token_balance(token_id)
+                    if actual_balance <= 0:
+                        print(f"[平仓] 代币余额已清空")
+                        sell_success = True
+                        break
+                    remaining_to_sell = actual_balance
                 
                 # 获取最新价格
                 current_prices = self.client.get_market_prices(self.config.market_id)
                 current_price = current_prices.get(token, exit_price) if current_prices else exit_price
                 sell_price = max(1, int(current_price * 100) - 2)
                 
-                print(f"[平仓] 创建卖出订单: {position_size:.4f}股 @ {sell_price}%")
+                # 检查是否足够最小金额
+                min_shares = 1.0 / (sell_price / 100.0)
+                if remaining_to_sell < min_shares:
+                    print(f"[平仓] 剩余股数不足最小金额（{remaining_to_sell:.4f}股 < {min_shares:.4f}股），停止卖出")
+                    break
+                
+                print(f"[平仓] 创建卖出订单: {remaining_to_sell:.4f}股 @ {sell_price}%")
                 
                 sell_order = self.client.create_order(
                     token_id=token_id,
                     price=sell_price,
-                    size=position_size,
+                    size=remaining_to_sell,
                     side="SELL",
                     order_type="GTC",
                 )
@@ -1937,6 +1935,7 @@ class TradingEngine:
                     
                     # 等待订单成交（最多10秒）
                     start_wait = time.time()
+                    order_filled = False
                     while time.time() - start_wait < 10:
                         try:
                             order_status = self.client.get_order(order_id)
@@ -1965,30 +1964,23 @@ class TradingEngine:
                                     if isinstance(actual_price, (int, float)) and actual_price > 1:
                                         actual_price = actual_price / 100.0
                                     # 计算成交金额
-                                    trade_amount = position_size * actual_price
-                                    print(f"[平仓] ✓ 成交 {position_size:.4f}股 @ {int(actual_price*100)}% | 金额: ${trade_amount:.2f}")
-                                    exit_price = actual_price
+                                    trade_amount = filled * actual_price
+                                    print(f"[平仓] ✓ 成交 {filled:.4f}股 @ {int(actual_price*100)}% | 金额: ${trade_amount:.2f}")
+                                    
+                                    # 累计卖出
+                                    total_sold += filled
+                                    total_amount += trade_amount
+                                    final_exit_price = actual_price
+                                    order_filled = True
                                     sell_success = True
                                     break
                         except:
                             pass
                         time.sleep(0.5)
                     
-                    if sell_success:
-                        # 卖出成功，检查是否还有剩余
-                        if token_id:
-                            remaining = self.client.get_token_balance(token_id)
-                            if remaining > 0.001:
-                                print(f"[平仓] 剩余股数: {remaining:.4f}股")
-                                # 检查剩余是否足够继续卖出
-                                min_for_remaining = 1.0 / (sell_price / 100.0)
-                                if remaining >= min_for_remaining:
-                                    # 继续卖出剩余
-                                    position_size = remaining
-                                    continue
-                                else:
-                                    print(f"[平仓] 剩余股数不足最小金额，结束")
-                        break
+                    if order_filled:
+                        # 继续检查是否还有剩余
+                        continue
                     else:
                         # 取消未成交的订单
                         try:
@@ -2004,20 +1996,23 @@ class TradingEngine:
                         if token_id:
                             new_balance = self.client.get_token_balance(token_id)
                             if new_balance > 0:
-                                position_size = new_balance
-                                print(f"[平仓] 重新查询余额: {position_size:.4f}股")
+                                remaining_to_sell = new_balance
+                                print(f"[平仓] 重新查询余额: {remaining_to_sell:.4f}股")
+                                continue
             
             except Exception as e:
                 print(f"[平仓] 卖出失败: {e}")
             
-            # 重试前等待
-            if not sell_success and retry < max_retries - 1:
-                print(f"[平仓] 等待重试 ({retry + 2}/{max_retries})...")
+            retry_count += 1
+            if retry_count < max_retries:
+                print(f"[平仓] 等待重试 ({retry_count + 1}/{max_retries})...")
                 time.sleep(2)
         
         # 计算盈亏
-        if sell_success:
-            self.close_position(token, position_size, entry_price, exit_price, exit_reason)
+        if sell_success and total_sold > 0:
+            # 使用加权平均价格计算盈亏
+            avg_exit_price = total_amount / total_sold if total_sold > 0 else final_exit_price
+            self.close_position(token, total_sold, entry_price, avg_exit_price, exit_reason)
         else:
             print(f"[平仓] 卖出失败，保留持仓等待事件结算")
             # 更新持仓记录
