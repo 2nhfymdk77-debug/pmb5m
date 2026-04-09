@@ -23,6 +23,7 @@ import math
 import sys
 from datetime import datetime
 from typing import Optional, Dict, List, Any
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from config import TradingConfig, TradeRecord, TradeHistory, ConfigValidationError
 from polymarket_api import PolymarketClient, format_time_remaining, format_price
 from pathlib import Path
@@ -1020,12 +1021,84 @@ class TradingEngine:
         except Exception as e:
             print(f" ✗ 异常: {e}")
             return False
+    
+    def _check_orders_parallel(self) -> Optional[Tuple[str, Dict]]:
+        """
+        并行查询所有订单状态（优化速度）
+        
+        Returns:
+            (order_id, order_status) 如果有订单成交，否则 None
+        """
+        if not self.pending_orders:
+            return None
+        
+        # 使用线程池并行查询所有订单
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            # 提交所有订单查询任务
+            future_to_order = {
+                executor.submit(self.client.get_order, order_id): order_id
+                for order_id in self.pending_orders.keys()
+            }
+            
+            # 检查结果，一旦发现成交立即返回
+            for future in as_completed(future_to_order):
+                order_id = future_to_order[future]
+                try:
+                    order_status = future.result()
+                    if order_status:
+                        # 检查是否成交
+                        filled = (
+                            order_status.get("filled_size", 0) or
+                            order_status.get("size_filled", 0) or
+                            order_status.get("fills", 0) or
+                            order_status.get("fill_amount", 0) or
+                            0
+                        )
+                        if filled > 0:
+                            return (order_id, order_status)
+                except Exception:
+                    pass
+        
+        return None
+    
+    def _place_stop_take_parallel(self, position_size: float) -> Tuple[Optional[str], Optional[str]]:
+        """
+        并行设置止损止盈订单（优化速度）
+        
+        Returns:
+            (stop_loss_order_id, take_profit_order_id)
+        """
+        stop_loss_result = None
+        take_profit_result = None
+        
+        # 使用线程池并行设置止损和止盈
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            # 提交止损和止盈任务
+            stop_future = executor.submit(self.place_stop_loss_order, position_size)
+            take_future = executor.submit(self.place_take_profit_order, position_size)
+            
+            # 等待结果
+            try:
+                stop_loss_result = stop_future.result(timeout=5)
+            except Exception as e:
+                self.logger.error(f"并行设置止损单失败: {e}")
+            
+            try:
+                take_profit_result = take_future.result(timeout=5)
+            except Exception as e:
+                self.logger.error(f"并行设置止盈单失败: {e}")
+        
+        return (stop_loss_result, take_profit_result)
 
     def wait_for_execution(self, position_size: float, max_wait: int = 300) -> bool:
         """
-        等待订单成交
+        等待订单成交（优化版：并行查询 + 并行止损止盈）
         
-        真实交易模式：轮询订单状态，成交后取消另一侧
+        优化点：
+        1. 并行查询订单状态（同时查询YES和NO）
+        2. 并行设置止损止盈（同时设置两个订单）
+        3. 降低价格显示频率（每3次循环更新一次）
+        4. 优化检查间隔（从0.5秒到0.3秒）
         
         Args:
             position_size: 仓位大小
@@ -1042,108 +1115,107 @@ class TradingEngine:
         print(f"\r[等待] 等待订单成交... (周期剩余 {max_wait} 秒)", end="", flush=True)
 
         start_time = time.time()
-        last_status_log = 0  # 上次输出状态的时间
+        last_status_log = 0
+        last_price_update = 0
+        loop_count = 0
 
         while time.time() - start_time < max_wait:
-            # 每秒获取最新价格
-            try:
-                prices = self.client.get_market_prices(self.config.market_id)
-                if prices:
-                    elapsed = int(time.time() - start_time)
-                    remaining = max_wait - elapsed
-                    print(f"\r[等待] YES ${prices.get('YES', 0):.2f} | NO ${prices.get('NO', 0):.2f} | 剩余 {remaining}s    ", end="", flush=True)
-            except Exception:
-                pass
+            loop_count += 1
+            current_time = time.time()
             
-            # 检查订单状态
-            for order_id in list(self.pending_orders.keys()):
+            # 【优化】价格显示频率降低：每3次循环更新一次（约0.9秒）
+            if loop_count % 3 == 0:
                 try:
-                    order_status = self.client.get_order(order_id)
-                    if order_status:
-                        # 检查多个可能的填充量字段名
-                        filled = (
-                            order_status.get("filled_size", 0) or
-                            order_status.get("size_filled", 0) or
-                            order_status.get("fills", 0) or
-                            order_status.get("fill_amount", 0) or
-                            0
-                        )
-                        if filled > 0:
-                            # 订单成交
-                            order_info = self.pending_orders[order_id]
-                            token = order_info["token"]
-
-                            print(f"\r\n[成交] ✓ 订单成交详情:")
-                            print(f"  订单ID: {order_id[:20]}...")
-                            print(f"  代币: {token}")
-                            print(f"  开仓价格: {order_info['price']} (美分单位)")
-                            print(f"  成交股数: {filled}")
-                            print(f"  记录股数: {order_info['size']}")
-                            print()
-
-                            # 设置当前持仓
-                            token_id = order_info.get("token_id")
-                            self.current_position = {
-                                "type": "LONG",  # 统一使用 LONG
-                                "token": token,  # YES 或 NO
-                                "token_id": token_id,  # 代币ID（用于设置止损止盈订单）
-                                "entry_price": order_info["price"],
-                                "size": order_info["size"],
-                                "timestamp": datetime.now(),
-                            }
-                            
-                            print(f"[成交] 持仓已记录:")
-                            print(f"  代币: {token}")
-                            print(f"  开仓价: {order_info['price']}")
-                            print(f"  股数: {order_info['size']}")
-
-                            # 【关键环节1】立即取消另一侧订单（不等待）
-                            print(f"\n[极速操作] 正在取消另一侧订单...")
-                            for other_order_id, other_order_info in list(self.pending_orders.items()):
-                                if other_order_id != order_id:
-                                    # 立即取消，不检查状态（避免延迟）
-                                    self._cancel_single_order(other_order_info)
-                                    # 从挂单列表中移除
-                                    if other_order_id in self.pending_orders:
-                                        del self.pending_orders[other_order_id]
-                                    break  # 只有一个另一侧订单
-                            
-                            # 【关键环节2】立即设置止损止盈（不等到监控阶段）
-                            print(f"\n[极速操作] 正在设置止损止盈订单...")
-                            self.stop_loss_order = None
-                            self.take_profit_order = None
-                            
-                            stop_loss_result = self.place_stop_loss_order(order_info['size'])
-                            take_profit_result = self.place_take_profit_order(order_info['size'])
-                            
-                            if stop_loss_result:
-                                print(f"[极速操作] ✓ 止损单设置成功: {stop_loss_result[:20]}...")
-                            else:
-                                print(f"[极速操作] ✗ 止损单设置失败！")
-                            
-                            if take_profit_result:
-                                print(f"[极速操作] ✓ 止盈单设置成功: {take_profit_result[:20]}...")
-                            else:
-                                print(f"[极速操作] ✗ 止盈单设置失败！")
-                            
-                            # 清除已成交的订单
-                            self.pending_orders.clear()
-                            
-                            print(f"\n[极速操作] ✓ 成交后处理完成，进入监控阶段")
-                            return True
+                    prices = self.client.get_market_prices(self.config.market_id)
+                    if prices:
+                        elapsed = int(current_time - start_time)
+                        remaining = max_wait - elapsed
+                        print(f"\r[等待] YES ${prices.get('YES', 0):.2f} | NO ${prices.get('NO', 0):.2f} | 剩余 {remaining}s    ", end="", flush=True)
                 except Exception:
-                    # 静默处理查询失败，不打印警告
                     pass
+            
+            # 【优化】并行查询所有订单状态
+            result = self._check_orders_parallel()
+            
+            if result:
+                order_id, order_status = result
+                order_info = self.pending_orders[order_id]
+                token = order_info["token"]
+                
+                # 获取成交数量
+                filled = (
+                    order_status.get("filled_size", 0) or
+                    order_status.get("size_filled", 0) or
+                    order_status.get("fills", 0) or
+                    order_status.get("fill_amount", 0) or
+                    0
+                )
+
+                print(f"\r\n[成交] ✓ 订单成交详情:")
+                print(f"  订单ID: {order_id[:20]}...")
+                print(f"  代币: {token}")
+                print(f"  开仓价格: {order_info['price']} (美分单位)")
+                print(f"  成交股数: {filled}")
+                print(f"  记录股数: {order_info['size']}")
+                print()
+
+                # 设置当前持仓
+                token_id = order_info.get("token_id")
+                self.current_position = {
+                    "type": "LONG",
+                    "token": token,
+                    "token_id": token_id,
+                    "entry_price": order_info["price"],
+                    "size": order_info["size"],
+                    "timestamp": datetime.now(),
+                }
+                
+                print(f"[成交] 持仓已记录:")
+                print(f"  代币: {token}")
+                print(f"  开仓价: {order_info['price']}")
+                print(f"  股数: {order_info['size']}")
+
+                # 【关键环节1】立即取消另一侧订单
+                print(f"\n[极速操作] 正在取消另一侧订单...")
+                for other_order_id, other_order_info in list(self.pending_orders.items()):
+                    if other_order_id != order_id:
+                        self._cancel_single_order(other_order_info)
+                        if other_order_id in self.pending_orders:
+                            del self.pending_orders[other_order_id]
+                        break
+                
+                # 【关键环节2 + 优化】并行设置止损止盈
+                print(f"\n[极速操作] 正在并行设置止损止盈订单...")
+                self.stop_loss_order = None
+                self.take_profit_order = None
+                
+                stop_loss_result, take_profit_result = self._place_stop_take_parallel(order_info['size'])
+                
+                if stop_loss_result:
+                    print(f"[极速操作] ✓ 止损单设置成功: {stop_loss_result[:20]}...")
+                else:
+                    print(f"[极速操作] ✗ 止损单设置失败！")
+                
+                if take_profit_result:
+                    print(f"[极速操作] ✓ 止盈单设置成功: {take_profit_result[:20]}...")
+                else:
+                    print(f"[极速操作] ✗ 止盈单设置失败！")
+                
+                # 清除已成交的订单
+                self.pending_orders.clear()
+                
+                print(f"\n[极速操作] ✓ 成交后处理完成，进入监控阶段")
+                return True
 
             # 每10秒输出一次状态
-            elapsed = int(time.time() - start_time)
+            elapsed = int(current_time - start_time)
             if elapsed - last_status_log >= 10:
                 remaining = max_wait - elapsed
                 print(f"\r[等待] 等待订单成交... 剩余 {remaining} 秒", end="", flush=True)
                 last_status_log = elapsed
 
-            # 【优化】检查间隔从1秒改为0.5秒，更快检测成交
-            time.sleep(0.5)
+            # 【优化】检查间隔从0.5秒改为0.3秒
+            time.sleep(0.3)
 
         # 超时未成交，但**不取消订单**，让订单继续挂着
         elapsed = int(time.time() - start_time)
