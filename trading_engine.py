@@ -497,19 +497,15 @@ class TradingEngine:
 
     def execute_trade_cycle(self) -> None:
         """执行一个完整的交易周期（5分钟）"""
-        print("\n" + "=" * 60)
-        print("[周期] 新周期开始")
-        print("=" * 60)
+        print("\n" + "=" * 50)
+        print("[周期] 开始")
 
         # 安全检查：清除之前的挂单（如果有）
         if self.pending_orders:
-            print(f"[安全] 清除上周期残留的 {len(self.pending_orders)} 个挂单")
             self._cancel_pending_orders()
         
         # 安全检查：如果还有持仓，先平仓（可能是上周期异常）
         if self.current_position:
-            print(f"[安全] 检测到残留持仓: {self.current_position.get('token', 'Unknown')}")
-            # 获取当前价格平仓
             try:
                 prices = self.client.get_market_prices(self.config.market_id)
                 if prices:
@@ -520,239 +516,151 @@ class TradingEngine:
                         self.current_position["size"],
                         self.current_position["entry_price"],
                         exit_price,
-                        "FORCED_CLOSE"  # 强制平仓
+                        "FORCED_CLOSE"
                     )
-                    print(f"[安全] 已强制平仓残留持仓")
             except Exception as e:
                 print(f"[错误] 强制平仓失败: {e}")
 
         self.cycle_start_time = datetime.now()
         cycle_start = time.time()
-        retry_count = 0
-        max_retries = 3
 
         try:
-            # 1. 【优化】快速获取市场数据（单次尝试，失败则跳过此周期）
-            print("[快速] 获取市场数据...")
+            # 1. 获取市场数据
             market_data = self.fetch_market_data()
             
             if not market_data:
-                print("[跳过] 无法获取市场数据，立即尝试新周期...")
-                # 立即返回，让主循环开始新周期
+                print("[跳过] 无法获取市场数据")
                 return
             
-            # 【关键修复】使用事件的实际剩余时间
+            # 事件剩余时间
             event_remaining = market_data.get("remaining_seconds", 300)
             cycle_duration = int(event_remaining)
             
-            # 获取当前市场 ID
-            new_market_id = self.config.market_id
-            
-            print(f"[*] 事件剩余时间: {cycle_duration} 秒 ({cycle_duration/60:.1f} 分钟)")
-            print(f"[*] 市场 ID: {new_market_id[:20] if new_market_id else 'N/A'}...")
-            
-            # 如果剩余时间少于30秒，跳过此周期，立即开始新周期
+            # 如果剩余时间少于30秒，跳过此周期
             if cycle_duration < 30:
-                print(f"[跳过] 事件即将结束（剩余{cycle_duration}秒），立即开始新周期...")
-                # 注意：不重置状态，让下一个周期正确判断是否为同一事件
-                # 如果下一个周期获取到新市场，is_new_event 会自动变为 True
-                # 立即返回，让主循环获取新的市场
+                print(f"[跳过] 事件即将结束 ({cycle_duration}秒)")
                 return
 
-            # 2. 检查是否是同一事件
-            is_new_event = self.current_event_id != new_market_id
-            
-            if is_new_event:
-                # 新事件，重置交易状态
-                self.current_event_id = new_market_id
-                self.has_traded_in_event = False
-                self.event_start_time = datetime.now()
-                print(f"[周期] 新事件: {new_market_id[:16]}...")
-
-            # 3. 如果当前事件已交易过，跳过挂单
+            # 2. 如果当前事件已交易过，跳过
             if self.has_traded_in_event:
-                print("[周期] 当前事件已交易过，跳过挂单")
+                print("[跳过] 当前事件已交易")
             else:
-                # 4. 【优化】并行获取余额和计算仓位（减少延迟）
+                # 3. 获取余额和计算仓位
                 self.update_balance()
                 position_size = self.calculate_position_size()
-                print(f"[挂单] 开仓金额: ${position_size:.2f}")
 
-                # 5. 检查价格是否达到目标，或开始监控
-                print("[监控] 检查价格是否达到目标...", flush=True)
-                sys.stdout.flush()
+                # 4. 检查价格是否达到目标
                 self.place_dual_orders(position_size)
 
                 # 计算周期剩余时间
                 elapsed = time.time() - cycle_start
                 remaining_time = max(0, cycle_duration - elapsed)
                 
-                # 6. 如果等待价格触发，进入监控阶段
+                # 5. 如果等待价格触发，进入监控阶段
                 if self.waiting_for_entry and not self.current_position:
-                    print(f"[监控] 进入价格监控阶段...")
                     has_execution = self._monitor_price_for_entry(position_size, max_wait=int(remaining_time))
                 elif self.current_position:
-                    # 已经买入（价格已经达到目标）
                     has_execution = True
                 else:
                     has_execution = False
 
-                # 如果没有买入，跳过此周期
+                # 如果没有买入，标记事件为已处理
                 if not has_execution and not self.current_position:
-                    print("[周期] 价格未触发，跳过此周期...")
-                    
-                    # 标记为已交易（已尝试，但未成交）
-                    if not self.has_traded_in_event:
-                        self.has_traded_in_event = True
-                        print("[周期] 标记事件为已处理（价格未触发）")
-                    
-                    # 等待剩余时间（如果有）
-                    elapsed = time.time() - cycle_start
-                    remaining_time = max(0, cycle_duration - elapsed)
-                    if remaining_time > 0:
-                        time.sleep(remaining_time)
+                    self.has_traded_in_event = True
+                    print("[跳过] 价格未触发")
                     return
 
-                # 10. 标记为已交易（无论是否成交）
-                if not self.has_traded_in_event:
-                    self.has_traded_in_event = True
+                # 标记为已交易
+                self.has_traded_in_event = True
 
-            # 10. 如果有持仓，监控止损止盈或到期
+            # 6. 如果有持仓，监控止损止盈或到期
             if self.current_position:
                 elapsed = time.time() - cycle_start
                 remaining_time = max(0, cycle_duration - elapsed)
                 
                 if remaining_time > 0:
-                    print(f"[监控] 剩余周期时间: {format_time_remaining(remaining_time)}")
                     exit_reason = self.monitor_position(remaining_time)
                 else:
-                    # 周期已结束，按TIMEOUT处理
                     exit_reason = "TIMEOUT"
                 
                 if exit_reason:
                     self.settle_position(exit_reason)
             else:
-                # 没有持仓，等待剩余时间
+                # 没有持仓，等待周期结束
                 elapsed = time.time() - cycle_start
                 remaining_time = max(0, cycle_duration - elapsed)
                 if remaining_time > 0:
-                    print(f"[等待] 无持仓，等待周期结束... ({format_time_remaining(remaining_time)})")
                     time.sleep(remaining_time)
 
-            # 11. 清理止损止盈订单
+            # 清理止损止盈订单
             self._cancel_stop_take_orders()
 
-            # 12. 输出统计
+            # 输出统计
             self.log_statistics()
-
-            # 13. 更新仪表盘（强制刷新）
-            self.show_dashboard(market_data, force_refresh=True)
-            
-            # 14. 周期结束，准备下一个周期
-            print(f"[周期] 周期结束，准备下一个周期...")
 
         except Exception as e:
             self.logger.error(f"执行交易周期出错: {e}", exc_info=True)
 
     def fetch_market_data(self) -> Optional[Dict[str, Any]]:
-        """
-        获取市场数据
-
-        真实交易模式：使用真实数据
-        """
+        """获取市场数据"""
         return self.fetch_real_market_data()
 
     def fetch_real_market_data(self) -> Optional[Dict[str, Any]]:
-        """获取真实市场数据（简化版）"""
-        import traceback
-        start_time = time.time()
-        
-        print("[诊断] >>> 进入 fetch_real_market_data")
-        
+        """获取真实市场数据"""
         try:
-            # 步骤1: 计算当前 5分钟周期的 slug
-            print("[诊断] 步骤1: 计算 BTC 5分钟市场 slug...")
+            # 计算当前 5分钟周期的 slug
             from datetime import datetime, timezone, timedelta
             
-            # 美东时区 (EDT in April = UTC-4)
             edt = timezone(timedelta(hours=-4))
             now_edt = datetime.now(edt)
             
-            # 计算当前 5分钟周期的开始时间（向下取整）
             minute = now_edt.minute
             current_period_minute = (minute // 5) * 5
             current_period_start = now_edt.replace(minute=current_period_minute, second=0, microsecond=0)
             
-            # 转换为 Unix 时间戳
             current_period_ts = int(current_period_start.timestamp())
-            
-            # 生成 slug
             current_slug = f"btc-updown-5m-{current_period_ts}"
             
-            print(f"[*] 美东时间: {now_edt.strftime('%Y-%m-%d %H:%M:%S')}")
-            print(f"[*] 当前5分钟周期: {current_period_start.strftime('%Y-%m-%d %H:%M')} (时间戳: {current_period_ts})")
-            print(f"[*] Slug: {current_slug}")
+            print(f"[*] 时间: {now_edt.strftime('%H:%M:%S')} | Slug: {current_slug[-10:]}")
             
-            # 步骤2: 直接通过 slug 获取市场
-            print(f"[诊断] 步骤2: 通过 slug 获取市场...")
+            # 通过 slug 获取市场
             market = self.client.get_market_by_slug(current_slug)
             
             if not market:
-                print(f"[*] 通过 slug 未找到，尝试获取列表...")
-                # 步骤3: 从列表中搜索
+                # 从列表中搜索
                 markets = self.client.get_tradable_markets(limit=200)
-                
                 if not markets:
-                    print("[错误] 无法获取市场列表")
                     return None
                 
-                print(f"[*] 搜索 btc-updown-5m 市场...")
-                
-                # 搜索 btc-updown-5m
                 for m in markets:
                     slug = (m.get('slug', '') or '').lower()
                     if 'btc-updown-5m' in slug:
                         market = m
-                        print(f"[*] 找到 BTC 市场: {slug}")
                         break
             
             if not market:
-                print("[错误] 没有找到 BTC 5分钟市场")
+                print("[错误] 未找到市场")
                 return None
             
-            # 步骤3: 提取市场信息
-            # 检查所有可能的 ID 字段
-            current_market_id = market.get("condition_id", "")
-            if not current_market_id:
-                current_market_id = market.get("id", "")
-            if not current_market_id:
-                current_market_id = market.get("conditionId", "")
-            
-            current_slug = market.get("slug", "")
-            current_question = market.get("question", "")
-            
-            print(f"[诊断] 步骤3: 选择市场")
-            print(f"  market keys: {list(market.keys())}")
-            print(f"  condition_id: {current_market_id[:30] if current_market_id else 'None'}...")
-            print(f"  slug: {current_slug}")
-            print(f"  question: {current_question[:50] if current_question else 'None'}")
+            # 提取市场信息
+            current_market_id = market.get("condition_id", "") or market.get("id", "") or market.get("conditionId", "")
             
             if not current_market_id:
-                print("[错误] 市场 condition_id 为空")
-                print(f"[诊断] 完整 market: {market}")
                 return None
             
-            # 步骤4: 设置 market_id（关键步骤）
-            print(f"[诊断] 步骤4: 设置 self.config.market_id")
+            # 检查是否是新事件
+            is_new_event = self.current_event_id != current_market_id
             self.config.market_id = current_market_id
-            self.current_event_id = current_market_id
-            self.has_traded_in_event = False
-            self.event_start_time = datetime.now()
             
-            print(f"[诊断] 确认 market_id 已设置: {self.config.market_id[:30] if self.config.market_id else 'None'}...")
+            if is_new_event:
+                self.current_event_id = current_market_id
+                self.has_traded_in_event = False
+                self.event_start_time = datetime.now()
+                print(f"[新事件] {current_slug[-15:]}")
+            else:
+                print(f"[同事件] 已交易: {self.has_traded_in_event}")
             
-            # 步骤5: 直接从市场数据获取 token IDs（避免重复API调用）
-            print(f"[诊断] 步骤5: 从市场数据获取 token IDs...")
+            # 获取 token IDs
             clob_token_ids = market.get("clobTokenIds", [])
             
             if isinstance(clob_token_ids, str):
@@ -765,62 +673,41 @@ class TradingEngine:
             if isinstance(clob_token_ids, list) and len(clob_token_ids) >= 2:
                 self.yes_token_id = clob_token_ids[0]
                 self.no_token_id = clob_token_ids[1]
-                print(f"[诊断] 直接从市场数据获取 token_ids 成功")
             else:
-                # 备用方案：调用 API 获取
-                print(f"[诊断] 市场数据中没有 clobTokenIds，尝试调用 API...")
                 token_ids = self.client.get_token_ids(current_market_id)
                 if not token_ids or "YES" not in token_ids or "NO" not in token_ids:
-                    print(f"[错误] token_ids 格式错误: {token_ids}")
                     return None
                 self.yes_token_id = token_ids.get("YES")
                 self.no_token_id = token_ids.get("NO")
             
-            print(f"[诊断] YES token: {self.yes_token_id[:20]}...")
-            print(f"[诊断] NO token: {self.no_token_id[:20]}...")
-            
-            # 步骤6: 获取事件的结束时间（关键！）
-            print(f"[诊断] 步骤6: 获取事件结束时间...")
+            # 获取事件结束时间
             end_timestamp = None
             
-            # 优先尝试 endDate 字段（时间戳，毫秒）
             end_date_raw = market.get("endDate")
             if end_date_raw:
                 try:
-                    # endDate 通常是毫秒时间戳
                     end_timestamp = float(end_date_raw) / 1000.0
-                    print(f"[*] 事件结束时间(endDate): {end_timestamp}")
                 except:
                     pass
             
-            # 如果没有，尝试 end_timestamp 字段
             if not end_timestamp:
                 end_ts_raw = market.get("end_timestamp") or market.get("endTimestamp") or market.get("end_ts")
                 if end_ts_raw:
                     try:
                         end_timestamp = float(end_ts_raw)
-                        print(f"[*] 事件结束时间戳: {end_timestamp}")
                     except:
                         pass
             
-            # 如果还是没有，尝试 endDateIso（注意：可能只有日期没有时间）
             if not end_timestamp:
                 end_date_iso = market.get("endDateIso") or market.get("end_date_iso")
-                if end_date_iso:
+                if end_date_iso and ':' in str(end_date_iso):
                     try:
-                        # 检查是否包含时间部分（有冒号表示有时间）
-                        if ':' in str(end_date_iso):
-                            end_timestamp = datetime.fromisoformat(end_date_iso.replace('Z', '+00:00')).timestamp()
-                            print(f"[*] 事件结束时间(endDateIso): {end_date_iso} (Unix: {end_timestamp})")
-                        else:
-                            # 只有日期，不使用
-                            print(f"[!] endDateIso 只有日期没有时间: {end_date_iso}")
-                    except Exception as e:
-                        print(f"[!] 解析结束时间失败: {e}")
+                        end_timestamp = datetime.fromisoformat(end_date_iso.replace('Z', '+00:00')).timestamp()
+                    except:
+                        pass
             
-            # 如果还是没有，计算下一个5分钟边界
+            # 如果没有结束时间，计算下一个5分钟边界
             if not end_timestamp:
-                # 计算当前5分钟周期的结束时间
                 edt = timezone(timedelta(hours=-4))
                 now_edt = datetime.now(edt)
                 minute = now_edt.minute
@@ -828,39 +715,26 @@ class TradingEngine:
                 next_period_minute = current_period_minute + 5
                 
                 if next_period_minute >= 60:
-                    # 跨小时
                     next_period = now_edt.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
                 else:
                     next_period = now_edt.replace(minute=next_period_minute, second=0, microsecond=0)
                 
                 end_timestamp = next_period.timestamp()
-                print(f"[*] 计算的事件结束时间: {next_period.strftime('%H:%M:%S')} (Unix: {end_timestamp})")
             
-            # 步骤7: 获取价格
-            print(f"[诊断] 步骤7: 获取价格...")
+            # 获取价格
             prices = self.client.get_market_prices(current_market_id)
-            print(f"[诊断] 价格: {prices}")
             
             if not prices:
-                print(f"[错误] 价格获取失败")
                 return None
             
             yes_price = prices.get("YES", 0)
             no_price = prices.get("NO", 0)
             
-            # 计算剩余时间（秒）
+            # 计算剩余时间
             current_timestamp = time.time()
             remaining_seconds = max(0, end_timestamp - current_timestamp)
             
-            print(f"[*] 当前时间: {datetime.now().strftime('%H:%M:%S')}")
-            print(f"[*] 事件剩余时间: {int(remaining_seconds)} 秒 ({remaining_seconds/60:.1f} 分钟)")
-            
-            # 记录更新时间
-            self.last_update_time = datetime.now().strftime("%H:%M:%S")
-            self.last_update_duration = (time.time() - start_time) * 1000
-            self.api_status = "connected"
-            
-            print(f"[OK] 市场数据获取成功: YES ${yes_price:.2f} | NO ${no_price:.2f}")
+            print(f"[*] 剩余: {int(remaining_seconds)}秒 | YES={int(yes_price*100)}% NO={int(no_price*100)}%")
             
             return {
                 "yes_price": yes_price,
@@ -870,9 +744,7 @@ class TradingEngine:
             }
             
         except Exception as e:
-            print(f"[错误] 获取市场数据异常: {e}")
-            traceback.print_exc()
-            self.api_status = "error"
+            print(f"[错误] 获取市场数据: {e}")
             return None
 
     def update_balance(self) -> None:
@@ -1050,186 +922,116 @@ class TradingEngine:
                 return
             else:
                 # 两边都未达到目标价，设置监控标志
-                print(f"\n[监控] 两边价格都未达到目标价 {entry_display}%")
-                print(f"[监控] 等待价格触发...")
+                print(f"[等待] 价格未达目标 {entry_display}%")
                 self.waiting_for_entry = True
                 self.entry_target_price = entry_price_float
                 self.entry_position_size = position_size
                 return
                 
         except Exception as e:
-            print(f"[错误] 获取市场价格失败: {e}")
+            print(f"[错误] 获取市场价格: {e}")
             return
 
     def _execute_market_buy(self, token: str, position_size: float, current_price: float) -> None:
-        """
-        执行市价买入（使用 FOK 订单确保立即成交）
-
-        Args:
-            token: 代币类型 ("YES" 或 "NO")
-            position_size: 开仓金额（美元）
-            current_price: 当前价格（0-1 格式）
-        """
+        """执行市价买入"""
         import math
         
-        print(f"\n[买入] 执行市价买入 {token}")
-        print(f"  当前价格: {current_price:.2f} ({int(current_price*100)}%)")
-        print(f"  开仓金额: ${position_size:.2f}")
+        print(f"[买入] {token} @ {int(current_price*100)}%")
         
         token_id = self.yes_token_id if token == "YES" else self.no_token_id
         
-        # 计算股数（以当前价格计算）
+        # 计算股数
         raw_size = position_size / current_price
         actual_size = math.ceil(raw_size)
         
         # 确保订单金额 >= $1
-        order_value = actual_size * current_price
-        if order_value < 1.0:
+        if actual_size * current_price < 1.0:
             actual_size = math.ceil(1.0 / current_price)
         
-        print(f"  计算股数: {raw_size:.2f} → {actual_size} 股")
-        print(f"  预计金额: ${actual_size * current_price:.2f}")
-        
         try:
-            # 使用 FOK 订单（全部成交或取消，相当于市价单）
-            # 价格设为略高于当前价，确保能成交
-            buy_price = min(current_price + 0.05, 0.99)  # 高 5%，最高 0.99
-            
-            print(f"  下单参数: price={buy_price:.2f}, size={actual_size}, type=FOK")
+            # FOK 订单
+            buy_price = min(current_price + 0.05, 0.99)
             
             order = self.client.create_order(
                 token_id=token_id,
-                price=int(buy_price * 100),  # 转换为美分
+                price=int(buy_price * 100),
                 size=float(actual_size),
                 side="BUY",
-                order_type="FOK",  # Fill-Or-Kill，市价单类型
+                order_type="FOK",
             )
             
             order_id = order.get("orderID") or order.get("order_id", "")
             
             if order_id and order.get("success") != False:
                 # 获取实际成交价格
-                actual_price = (
-                    order.get("price") or
-                    order.get("avg_price") or
-                    buy_price
-                )
+                actual_price = order.get("price") or order.get("avg_price") or buy_price
                 if isinstance(actual_price, str):
                     actual_price = float(actual_price)
                 if actual_price < 1:
-                    actual_price = actual_price * 100  # 转换为美分
+                    actual_price = actual_price * 100
                 
                 # 记录持仓
                 self.current_position = {
                     "type": "LONG",
                     "token": token,
                     "token_id": token_id,
-                    "entry_price": actual_price,  # 实际成交价格（美分单位）
+                    "entry_price": actual_price,
                     "size": actual_size,
                     "timestamp": datetime.now(),
                 }
                 
-                print(f"[买入] ✓ 买入成功!")
-                print(f"  实际成交价: {actual_price} (美分单位)")
-                print(f"  成交股数: {actual_size}")
-                print(f"  成交金额: ${actual_size * actual_price / 100:.2f}")
+                print(f"[买入] ✓ 成交 {actual_size}股 @ {int(actual_price)}%")
                 
-                # 立即标记为已交易（防止重复下单）
-                if not self.has_traded_in_event:
-                    self.has_traded_in_event = True
-                    print("[买入] 标记事件为已交易")
+                # 标记为已交易
+                self.has_traded_in_event = True
                 
                 # 设置止损止盈
-                print(f"\n[止损止盈] 设置止损止盈...")
                 self.stop_loss_order = None
                 self.take_profit_order = None
                 
                 stop_result = self.place_stop_loss_order(actual_size)
                 take_result = self.place_take_profit_order(actual_size)
                 
-                if stop_result:
-                    print(f"[止损止盈] ✓ 止损单设置成功: {stop_result[:20]}...")
-                if take_result:
-                    print(f"[止损止盈] ✓ 止盈单设置成功: {take_result[:20]}...")
-                    
                 self.waiting_for_entry = False
             else:
                 error_msg = order.get("errorMsg", "Unknown error")
-                print(f"[买入] ✗ 买入失败: {error_msg}")
+                print(f"[买入] ✗ 失败: {error_msg}")
                 
         except Exception as e:
-            print(f"[买入] ✗ 买入失败: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"[买入] ✗ 失败: {e}")
 
     def _monitor_price_for_entry(self, position_size: float, max_wait: int) -> bool:
-        """
-        监控价格，等待达到目标价时买入（最低延时版 + 调试）
-
-        【优化策略】：
-        - 统一使用最低延时检查（0.05秒 = 50毫秒）
-        - 追求极致实时性，不考虑API调用次数
-        - 使用 CLOB API 获取实时订单簿价格
-
-        Args:
-            position_size: 开仓金额
-            max_wait: 最大等待时间（秒）
-
-        Returns:
-            True 如果成功买入，False 如果超时未触发
-        """
+        """监控价格，等待达到目标价时买入"""
         if not self.waiting_for_entry:
             return False
 
         entry_target = self.entry_target_price
-        print(f"\n[监控] 开始监控价格，等待涨到 {int(entry_target * 100)}%...")
-        print(f"[监控] 目标价: {entry_target:.2f} (0-1格式)")
-        print(f"[监控] 市场 ID: {self.config.market_id}")
-        print(f"[监控] YES Token: {self.yes_token_id[:20] if self.yes_token_id else 'N/A'}...")
-        print(f"[监控] NO Token: {self.no_token_id[:20] if self.no_token_id else 'N/A'}...")
-        print(f"[监控] 检查间隔: 0.05秒（最低延时）")
-        print(f"[监控] 使用 CLOB API 获取实时订单簿价格")
+        print(f"[监控] 等待价格涨到 {int(entry_target * 100)}%")
 
         start_time = time.time()
         last_log_time = 0
-        api_call_count = 0
 
         while time.time() - start_time < max_wait:
             try:
-                api_call_count += 1
-                
-                # 每 10 次调用输出一次详细调试信息
-                debug_mode = (api_call_count % 10 == 0)
-                
-                # 使用 CLOB API 获取实时价格，传递 token_id 避免重复查询
+                # 获取实时价格
                 prices = self.client.get_market_prices(
-                    self.config.market_id, 
-                    debug=debug_mode,
+                    self.config.market_id,
                     yes_token_id=self.yes_token_id,
                     no_token_id=self.no_token_id
                 )
                 
                 if not prices:
-                    print(f"\n[警告] 价格数据为空，等待...")
                     time.sleep(0.05)
                     continue
 
                 yes_price = prices.get("YES", 0.5)
                 no_price = prices.get("NO", 0.5)
-                
-                if debug_mode:
-                    print(f"[调试] YES >= 目标: {yes_price >= entry_target} ({yes_price:.4f} >= {entry_target:.4f})")
-                    print(f"[调试] NO >= 目标: {no_price >= entry_target} ({no_price:.4f} >= {entry_target:.4f})")
 
-                # 每 1 秒输出一次价格（避免刷屏）
+                # 每 1 秒输出一次价格
                 current_time = time.time()
                 if current_time - last_log_time >= 1.0:
-                    elapsed = int(current_time - start_time)
-                    remaining = max_wait - elapsed
-                    yes_dist = abs(yes_price - entry_target)
-                    no_dist = abs(no_price - entry_target)
-                    min_dist = min(yes_dist, no_dist)
-                    print(f"\r[监控] YES={int(yes_price*100)}% NO={int(no_price*100)}% | 距离{int(min_dist*100)}% | 剩余 {remaining}s | API#{api_call_count}    ", end="", flush=True)
+                    remaining = int(max_wait - (current_time - start_time))
+                    print(f"\r[监控] YES={int(yes_price*100)}% NO={int(no_price*100)}% | 剩余{remaining}s    ", end="", flush=True)
                     last_log_time = current_time
 
                 # 检查是否达到目标价
@@ -1237,7 +1039,6 @@ class TradingEngine:
                 no_reached = no_price >= entry_target
 
                 if yes_reached or no_reached:
-                    # 优先买先达到的，如果都达到则买价格更高的
                     if yes_reached and no_reached:
                         token = "YES" if yes_price > no_price else "NO"
                         price = max(yes_price, no_price)
@@ -1248,21 +1049,16 @@ class TradingEngine:
                         token = "NO"
                         price = no_price
 
-                    print(f"\n\n[触发] {token} 价格达到目标 {int(entry_target * 100)}%!")
-                    print(f"[触发] 实际价格: YES={yes_price:.2f}, NO={no_price:.2f}")
+                    print(f"\n[触发] {token} 达到 {int(entry_target * 100)}%")
                     self._execute_market_buy(token, position_size, price)
                     return True
 
-                # 最低延时检查：0.05 秒
                 time.sleep(0.05)
 
             except Exception as e:
-                print(f"\n[错误] 监控价格失败: {e}")
-                import traceback
-                traceback.print_exc()
                 time.sleep(0.05)
 
-        print(f"\n[监控] 超时未触发，跳过此周期")
+        print(f"\n[监控] 超时未触发")
         self.waiting_for_entry = False
         return False
 
@@ -1837,55 +1633,20 @@ class TradingEngine:
             return None
 
     def monitor_position(self, max_wait: float) -> Optional[str]:
-        """
-        监控持仓：止损、止盈或到期（最低延时版）
-
-        【策略说明】：
-        - 止损：价格监控方式，当价格 <= 止损价时主动卖出
-        - 止盈：限价卖单 + 价格监控双重保障
-        - 到期：按照事件结果平仓
-
-        【重要】：
-        - 止损只能通过价格监控实现（限价卖单无法实现止损）
-        - 止盈有限价卖单和价格监控双重保障
-        - 统一使用最低延时检查（0.05秒 = 50毫秒）
-
-        Args:
-            max_wait: 最大监控时间（秒）
-
-        Returns:
-            退出原因：'STOP_LOSS', 'TAKE_PROFIT', 'TIMEOUT', 或 None
-        """
+        """监控持仓：止损、止盈或到期"""
         if not self.current_position:
             return None
 
         position = self.current_position
-        entry_price = position["entry_price"]
-        position_size = position["size"]
         token = position.get("token", "YES")
 
-        stop_loss_price = self.config.stop_loss
-        stop_loss_display = stop_loss_price / 100.0 if stop_loss_price > 1 else stop_loss_price
-        take_profit_price = self.config.take_profit
-        take_profit_display = take_profit_price / 100.0 if take_profit_price > 1 else take_profit_price
+        stop_loss_price = self.config.stop_loss / 100.0 if self.config.stop_loss > 1 else self.config.stop_loss
+        take_profit_price = self.config.take_profit / 100.0 if self.config.take_profit > 1 else self.config.take_profit
 
-        # 转换entry_price为0-1格式用于显示
-        entry_price_display = entry_price / 100.0 if entry_price > 1 else entry_price
+        print(f"[监控] {token} | 止损={int(stop_loss_price*100)}% 止盈={int(take_profit_price*100)}%")
 
-        print(f"[监控] 持仓详情:")
-        print(f"  代币: {token}")
-        print(f"  开仓价格: {entry_price_display:.2f} ({int(entry_price_display*100)}%)")
-        print(f"  持仓股数: {position_size}")
-        print(f"  止损价格: {stop_loss_display:.2f} ({int(stop_loss_display*100)}%) - 价格监控")
-        print(f"  止盈价格: {take_profit_display:.2f} ({int(take_profit_display*100)}%) - 限价单 + 价格监控")
-        print(f"  监控时长: {max_wait:.1f}秒")
-        print(f"[监控] 检查间隔: 0.05秒（最低延时）")
-
-        # 监控止损止盈
         start_time = time.time()
         last_log_time = 0
-
-        print(f"\n[监控] 开始监控止损止盈...")
 
         while time.time() - start_time < max_wait:
             current_time = time.time()
@@ -1899,29 +1660,23 @@ class TradingEngine:
 
                 current_price = prices.get(token, 0.5)
 
-                # 价格格式转换
-                stop_loss_price_float = stop_loss_price / 100.0 if stop_loss_price > 1 else stop_loss_price
-                take_profit_price_float = take_profit_price / 100.0 if take_profit_price > 1 else take_profit_price
-
-                # 【止损检查】价格 <= 止损价
-                if current_price <= stop_loss_price_float:
-                    print(f"\r\n[触发] ⚠️ 止损触发! {token} 价格 {current_price:.2f} <= 止损价 {stop_loss_price_float:.2f}    ")
-                    # 取消止盈订单
+                # 止损检查
+                if current_price <= stop_loss_price:
+                    print(f"\n[止损] {token} 价格 {int(current_price*100)}% <= {int(stop_loss_price*100)}%")
                     if self.take_profit_order:
                         self._cancel_single_order(self.take_profit_order)
                         self.take_profit_order = None
                     return "STOP_LOSS"
 
-                # 【止盈检查】价格 >= 止盈价
-                if current_price >= take_profit_price_float:
-                    print(f"\r\n[触发] ✓ 止盈触发! {token} 价格 {current_price:.2f} >= 止盈价 {take_profit_price_float:.2f}    ")
-                    # 取消止盈订单（如果还在）
+                # 止盈检查
+                if current_price >= take_profit_price:
+                    print(f"\n[止盈] {token} 价格 {int(current_price*100)}% >= {int(take_profit_price*100)}%")
                     if self.take_profit_order:
                         self._cancel_single_order(self.take_profit_order)
                         self.take_profit_order = None
                     return "TAKE_PROFIT"
 
-                # 【止盈订单成交检查】检查止盈订单是否已成交
+                # 止盈订单成交检查
                 if self.take_profit_order:
                     try:
                         order_id = self.take_profit_order.get("orderID")
@@ -1935,39 +1690,32 @@ class TradingEngine:
                                 0
                             )
                             if filled > 0:
-                                print(f"\r\n[触发] ✓ 止盈订单已成交!                      ")
-                                # 【关键修复】保存实际成交价格，避免重复卖出
+                                print(f"\n[止盈] 订单已成交")
                                 self.take_profit_filled_price = (
                                     order_status.get("price") or
                                     order_status.get("avg_price") or
                                     order_status.get("filled_price") or
-                                    order_status.get("execution_price") or
-                                    self.config.take_profit  # 默认使用止盈价格
+                                    self.config.take_profit
                                 )
-                                # 如果价格是整数（美分），转换为小数
                                 if isinstance(self.take_profit_filled_price, (int, float)) and self.take_profit_filled_price > 1:
                                     self.take_profit_filled_price = self.take_profit_filled_price / 100.0
                                 self.take_profit_order = None
-                                return "TAKE_PROFIT_FILLED"  # 新增返回值，区分已成交的情况
-                    except Exception:
+                                return "TAKE_PROFIT_FILLED"
+                    except:
                         pass
 
-                # 每 1 秒输出一次状态（避免刷屏）
+                # 每 1 秒输出一次状态
                 if current_time - last_log_time >= 1.0:
-                    elapsed = int(current_time - start_time)
-                    remaining = int(max_wait - elapsed)
-                    print(f"\r[监控] {token}: {current_price:.2f} | 止损{stop_loss_display:.2f} 止盈{take_profit_display:.2f} | 剩余{remaining}s    ", end="", flush=True)
+                    remaining = int(max_wait - (current_time - start_time))
+                    print(f"\r[监控] {token}={int(current_price*100)}% | 剩余{remaining}s    ", end="", flush=True)
                     last_log_time = current_time
 
-                # 最低延时检查：0.05 秒
                 time.sleep(0.05)
 
-            except Exception as e:
-                print(f"\n[错误] 监控失败: {e}")
+            except:
                 time.sleep(0.05)
 
-        # 周期结束，未触发止损止盈
-        print(f"\r[监控] 周期结束，未触发止损止盈                    ")
+        print(f"\n[监控] 周期结束")
         return "TIMEOUT"
 
     def _cancel_single_order(self, order: Dict) -> None:
@@ -1980,107 +1728,72 @@ class TradingEngine:
             pass
 
     def settle_position(self, exit_reason: str) -> None:
-        """
-        根据退出原因结算持仓
-        
-        Args:
-            exit_reason: 退出原因 ('STOP_LOSS', 'TAKE_PROFIT', 'TIMEOUT')
-        """
+        """根据退出原因结算持仓"""
         if not self.current_position:
             return
 
         position = self.current_position
-        entry_price_raw = position["entry_price"]  # 可能是 75 或 0.75
-        position_type = position["type"]
+        entry_price_raw = position["entry_price"]
         position_size = position["size"]
         token = position.get("token", "YES")
         token_id = position.get("token_id")
 
-        # 确保价格格式统一为 0-1 格式
+        # 转换为 0-1 格式
         def to_float_price(price: float) -> float:
-            """转换为 0-1 格式"""
             if price > 1:
                 return price / 100.0
             return price
 
-        # 统一转换
         entry_price = to_float_price(entry_price_raw)
 
         # 确定平仓价格
         if exit_reason == "STOP_LOSS":
-            # 止损触发：获取当前价格卖出
             try:
                 prices = self.client.get_market_prices(self.config.market_id)
                 exit_price = to_float_price(prices.get(token, self.config.stop_loss))
             except:
                 exit_price = to_float_price(self.config.stop_loss)
         elif exit_reason == "TAKE_PROFIT":
-            # 止盈触发（价格监控）：获取当前价格卖出
             try:
                 prices = self.client.get_market_prices(self.config.market_id)
                 exit_price = to_float_price(prices.get(token, self.config.take_profit))
             except:
                 exit_price = to_float_price(self.config.take_profit)
         elif exit_reason == "TAKE_PROFIT_FILLED":
-            # 【新增】止盈订单已成交：使用实际成交价格，无需再卖出
             exit_price = getattr(self, 'take_profit_filled_price', to_float_price(self.config.take_profit))
             if isinstance(exit_price, str):
                 exit_price = float(exit_price)
             if exit_price > 1:
                 exit_price = exit_price / 100.0
-            print(f"\n[平仓] 止盈订单已成交，实际成交价: {exit_price:.2f}")
         elif exit_reason == "TIMEOUT":
-            # 到期结算：获取事件结果
             event_result = self.get_event_result()
             if event_result:
-                # 根据持仓代币和事件结果确定平仓价
                 if event_result == token:
-                    # 持仓的代币获胜
-                    exit_price = 1.0  # 100% -> 1.0
-                    self.logger.info(f"[OK] 事件结果: {event_result}，{token} 获胜，平仓价: 1.0")
+                    exit_price = 1.0
                 else:
-                    # 持仓的代币失败
-                    exit_price = 0.0  # 0% -> 0.0
-                    self.logger.info(f"[X] 事件结果: {event_result}，{token} 失败，平仓价: 0.0")
+                    exit_price = 0.0
             else:
-                # 无法获取事件结果，使用当前价格
                 try:
                     prices = self.client.get_market_prices(self.config.market_id)
-                    if prices:
-                        exit_price = to_float_price(prices.get(token, entry_price))
-                    else:
-                        exit_price = entry_price
-                    self.logger.warning(f"[!] 无法获取事件结果，使用当前价格平仓: {exit_price:.2f}")
-                except Exception as e:
-                    self.logger.error(f"获取市场价格失败: {e}")
-                    exit_price = 0.0
+                    exit_price = to_float_price(prices.get(token, entry_price)) if prices else entry_price
+                except:
+                    exit_price = entry_price
         else:
-            exit_price = entry_price  # 默认按开仓价平仓
+            exit_price = entry_price
 
-        # 【关键修复】实际卖出持仓代币
-        # 注意：如果是 TAKE_PROFIT_FILLED，说明止盈订单已经成交，不需要再创建卖出订单
+        # 卖出持仓代币（如果是 TAKE_PROFIT_FILLED 则跳过）
         if exit_reason == "TAKE_PROFIT_FILLED":
-            print(f"\n[平仓] 止盈订单已成交，跳过创建新卖出订单")
-            print(f"  代币: {token}")
-            print(f"  实际成交价格: ${exit_price:.2f}")
-            print(f"  卖出数量: {position_size} 股")
+            print(f"[平仓] 止盈已成交 @ {int(exit_price*100)}%")
         else:
-            print(f"\n[平仓] 开始执行平仓操作...")
-            print(f"  代币: {token}")
-            print(f"  平仓价格: ${exit_price:.2f}")
-            print(f"  卖出数量: {position_size} 股")
+            print(f"[平仓] 卖出 {token} {position_size}股")
             
             if token_id:
                 try:
-                    # 创建卖出订单（使用更低的价格确保成交）
-                    # 止损时价格可能快速下跌，使用更低的价格作为限价
+                    # 止损时使用更低价格确保成交
                     if exit_reason == "STOP_LOSS":
-                        # 止损：使用止损价 - 2 作为卖出价，确保能成交
                         sell_price = max(1, int(to_float_price(self.config.stop_loss) * 100) - 2)
-                        print(f"[平仓] 止损卖出：使用价格 {sell_price} (止损价-2，确保成交)")
                     else:
-                        # 止盈（价格监控触发）：使用当前价格
-                        sell_price = int(exit_price * 100)  # 转换为美分
+                        sell_price = int(exit_price * 100)
                     
                     sell_order = self.client.create_order(
                         token_id=token_id,
@@ -2092,9 +1805,8 @@ class TradingEngine:
                     
                     if sell_order and sell_order.get("success") != False:
                         order_id = sell_order.get("orderID") or sell_order.get("order_id", "")
-                        print(f"[平仓] ✓ 卖出订单已挂: {order_id[:20] if order_id else 'N/A'}...")
                         
-                        # 等待订单成交（最多10秒，增加等待时间）
+                        # 等待订单成交（最多10秒）
                         start_wait = time.time()
                         while time.time() - start_wait < 10:
                             try:
@@ -2116,37 +1828,31 @@ class TradingEngine:
                                         )
                                         if isinstance(actual_price, (int, float)) and actual_price > 1:
                                             actual_price = actual_price / 100.0
-                                        print(f"[平仓] ✓ 卖出订单已成交! 实际成交价: {actual_price:.2f}")
-                                        # 更新平仓价格为实际成交价格
+                                        print(f"[平仓] ✓ 成交 @ {int(actual_price*100)}%")
                                         exit_price = actual_price
                                         break
                             except:
                                 pass
                             time.sleep(0.5)
                         else:
-                            print(f"[平仓] ⚠️ 订单未在10秒内成交，订单ID: {order_id[:20] if order_id else 'N/A'}...")
-                            # 订单可能稍后成交，记录订单ID
-                            if order_id:
-                                print(f"[平仓] 订单已挂单，等待后续成交...")
+                            print(f"[平仓] 订单未成交")
                     else:
-                        print(f"[平仓] ✗ 卖出订单创建失败: {sell_order.get('errorMsg', 'Unknown') if sell_order else 'Empty'}")
+                        print(f"[平仓] ✗ 订单失败")
                 except Exception as e:
-                    print(f"[平仓] ✗ 卖出操作失败: {e}")
+                    print(f"[平仓] ✗ 卖出失败: {e}")
 
-        # 平仓（更新余额和记录）
-        self.close_position(position_type, position_size, entry_price, exit_price, exit_reason)
+        # 更新余额和记录
+        self.close_position(position["type"], position_size, entry_price, exit_price, exit_reason)
 
-        # 结算后重新同步真实余额（止损/止盈是实时结算，TIMEOUT需要等事件结算）
+        # 同步真实余额
         if exit_reason in ["STOP_LOSS", "TAKE_PROFIT", "TAKE_PROFIT_FILLED"]:
-            # 止损止盈是实时结算，延迟1秒后同步
             time.sleep(1)
             try:
                 real_balance = self.client.get_balance()
                 if real_balance is not None and real_balance >= 0:
                     self.balance = real_balance
-                    self.logger.info(f"[同步] 真实余额已更新: ${self.balance:.2f}")
-            except Exception as e:
-                self.logger.error(f"[同步] 同步余额失败: {e}")
+            except:
+                pass
 
     def _cancel_stop_take_orders(self) -> None:
         """取消止损止盈订单"""
@@ -2155,9 +1861,8 @@ class TradingEngine:
                 order_id = self.stop_loss_order.get("orderID")
                 if order_id:
                     self.client.cancel_order(order_id)
-                    self.logger.info(f"已取消止损订单: {order_id}")
-            except Exception as e:
-                self.logger.error(f"取消止损订单失败: {e}")
+            except:
+                pass
             self.stop_loss_order = None
 
         if self.take_profit_order:
@@ -2165,9 +1870,8 @@ class TradingEngine:
                 order_id = self.take_profit_order.get("orderID")
                 if order_id:
                     self.client.cancel_order(order_id)
-                    self.logger.info(f"已取消止盈订单: {order_id}")
-            except Exception as e:
-                self.logger.error(f"取消止盈订单失败: {e}")
+            except:
+                pass
             self.take_profit_order = None
 
     def close_position(
@@ -2178,13 +1882,8 @@ class TradingEngine:
         exit_price: float,
         exit_reason: str,
     ) -> None:
-        """平仓并计算盈亏
-
-        正确逻辑：
-        - YES 和 NO 都是做多
-        - 盈亏 = (平仓价 - 开仓价) * 开仓金额 / 开仓价
-        """
-        # 计算盈亏（只有做多逻辑）
+        """平仓并计算盈亏"""
+        # 计算盈亏
         pnl = (exit_price - entry_price) * position_size / entry_price
 
         # 更新余额
@@ -2192,13 +1891,12 @@ class TradingEngine:
         self.balance += pnl
         balance_after = self.balance
 
-        # 记录交易
         token = self.current_position.get("token", "UNKNOWN") if self.current_position else "UNKNOWN"
         trade_record = TradeRecord(
             trade_id=f"trade_{int(time.time())}",
             timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             type=position_type,
-            token=token,  # 添加代币类型
+            token=token,
             entry_price=entry_price,
             exit_price=exit_price,
             position_size=position_size,
@@ -2210,52 +1908,20 @@ class TradingEngine:
 
         self.trade_history.add(trade_record)
 
-        self.logger.info(
-            f"步骤4: 平仓 - {position_type} ({self.current_position.get('token', 'UNKNOWN') if self.current_position else 'N/A'}) | "
-            f"开仓: {entry_price:.2f} | "
-            f"平仓: {exit_price:.2f} | "
-            f"盈亏: {pnl:+.2f} | "
-            f"原因: {exit_reason} | "
-            f"余额: {balance_before:.2f} → {balance_after:.2f}"
-        )
+        # 输出结果
+        result = "✓" if pnl >= 0 else "✗"
+        print(f"[结果] {token} {result} {pnl:+.2f} | 余额: {balance_before:.2f} → {balance_after:.2f}")
 
-        # 清除持仓和止损止盈订单
+        # 清除持仓
         self.current_position = None
         self.stop_loss_order = None
         self.take_profit_order = None
 
-        # 【新增】交易结束后输出实时统计
-        self._print_trade_summary(trade_record)
-
     def _print_trade_summary(self, last_trade: TradeRecord) -> None:
-        """
-        输出实时交易情况统计（每次交易结束后）
-        
-        Args:
-            last_trade: 刚刚完成的交易记录
-        """
+        """输出交易统计"""
         stats = self.trade_history.get_statistics()
         
-        print("\n" + "=" * 60)
-        print("📊 实时交易统计")
-        print("=" * 60)
-        
-        # 本次交易信息
-        print("【本次交易】")
-        print(f"  代币: {last_trade.token}")
-        print(f"  方向: 做多")
-        print(f"  开仓价: ${last_trade.entry_price:.2f}")
-        print(f"  平仓价: ${last_trade.exit_price:.2f}")
-        print(f"  持仓量: {last_trade.position_size} 股")
-        
-        # 盈亏显示（带颜色）
-        pnl = last_trade.pnl
-        if pnl >= 0:
-            print(f"  盈亏: ${pnl:+.2f} ✅")
-        else:
-            print(f"  盈亏: ${pnl:+.2f} ❌")
-        
-        # 退出原因
+        print(f"\n[统计] 总交易: {stats['total_trades']} | 胜率: {stats['win_rate']:.1%} | 总盈亏: {stats['total_pnl']:+.2f}")
         exit_reason_map = {
             "STOP_LOSS": "止损触发",
             "TAKE_PROFIT": "止盈触发",
@@ -2265,81 +1931,7 @@ class TradingEngine:
         print(f"  退出原因: {exit_reason_map.get(last_trade.exit_reason, last_trade.exit_reason)}")
         print(f"  时间: {last_trade.timestamp}")
         
-        print("-" * 60)
-        
-        # 累计统计
-        print("【累计统计】")
-        print(f"  总交易次数: {stats['total_trades']} 次")
-        print(f"  盈利次数: {stats['win_trades']} 次 ✅")
-        print(f"  亏损次数: {stats['loss_trades']} 次 ❌")
-        
-        # 胜率（带颜色）
-        win_rate = stats['win_rate']
-        if win_rate >= 50:
-            print(f"  胜率: {win_rate:.2f}% ✅")
-        else:
-            print(f"  胜率: {win_rate:.2f}% ❌")
-        
-        # 总盈亏（带颜色）
-        total_profit = stats['total_profit']
-        if total_profit >= 0:
-            print(f"  总盈亏: ${total_profit:+.2f} ✅")
-        else:
-            print(f"  总盈亏: ${total_profit:+.2f} ❌")
-        
-        print("-" * 60)
-        
-        # 账户余额
-        print("【账户余额】")
-        print(f"  交易前: ${last_trade.balance_before:.2f}")
-        print(f"  交易后: ${last_trade.balance_after:.2f}")
-        
-        # 余额变化（带颜色）
-        balance_change = last_trade.balance_after - last_trade.balance_before
-        if balance_change >= 0:
-            print(f"  变化: ${balance_change:+.2f} ✅")
-        else:
-            print(f"  变化: ${balance_change:+.2f} ❌")
-        
-        # 相对初始余额的变化
-        if self.initial_balance > 0:
-            total_return = ((last_trade.balance_after - self.initial_balance) / self.initial_balance) * 100
-            if total_return >= 0:
-                print(f"  总收益率: {total_return:+.2f}% ✅")
-            else:
-                print(f"  总收益率: {total_return:+.2f}% ❌")
-        
-        print("=" * 60)
-        print()
-
     def log_statistics(self) -> None:
-        """输出统计信息（包含 API 使用统计）"""
+        """输出统计信息"""
         stats = self.trade_history.get_statistics()
-
-        self.logger.info("-" * 60)
-        self.logger.info("交易统计:")
-        self.logger.info(f"  总交易次数: {stats['total_trades']}")
-        self.logger.info(f"  盈利次数: {stats['win_trades']}")
-        self.logger.info(f"  亏损次数: {stats['loss_trades']}")
-        self.logger.info(f"  总盈亏: ${stats['total_profit']:+.2f}")
-        self.logger.info(f"  胜率: {stats['win_rate']:.2f}%")
-        self.logger.info(f"  当前余额: ${self.balance:.2f}")
-
-        # API 使用统计
-        self.logger.info("-" * 60)
-        self.logger.info("API 使用统计:")
-        self.logger.info(f"  总调用次数: {self.api_call_stats['total_calls']}")
-        self.logger.info(f"  缓存命中次数: {self.api_call_stats['cache_hits']}")
-        self.logger.info(f"  错误次数: {self.api_call_stats['errors']}")
-        self.logger.info(f"  缓存命中率: {self.api_call_stats['cache_hits'] / max(self.api_call_stats['total_calls'], 1) * 100:.1f}%")
-        self.logger.info("-" * 60)
-
-    def log_api_performance(self, operation: str, duration_ms: float, cache_hit: bool = False) -> None:
-        """记录 API 性能"""
-        self.api_call_stats["total_calls"] += 1
-        if cache_hit:
-            self.api_call_stats["cache_hits"] += 1
-
-        # 每 100 次调用输出一次统计
-        if self.api_call_stats["total_calls"] % 100 == 0:
-            self.log_statistics()
+        print(f"\n[统计] 交易: {stats['total_trades']} | 胜率: {stats['win_rate']:.1%} | 盈亏: {stats['total_profit']:+.2f} | 余额: {self.balance:.2f}")

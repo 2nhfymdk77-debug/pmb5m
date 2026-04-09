@@ -418,6 +418,26 @@ python main.py
 
 ## 更新日志
 
+### 2025-04-10 - 彻底修复重复开单问题 + 简化程序
+- **问题**：`fetch_real_market_data` 方法每次都重置 `has_traded_in_event = False`，导致重复开单
+- **解决方案**：
+  - 只在检测到新事件（`current_event_id != new_market_id`）时才重置 `has_traded_in_event`
+  - 简化交易流程和状态管理
+  - 简化输出显示，去除冗余信息
+- **简化内容**：
+  - 移除大量调试输出
+  - 精简 `execute_trade_cycle` 方法
+  - 精简 `fetch_real_market_data` 方法
+  - 精简 `_monitor_price_for_entry` 方法
+  - 精简 `monitor_position` 方法
+  - 精简 `settle_position` 方法
+  - 精简 `close_position` 方法
+  - 精简 `log_statistics` 方法
+- **效果**：
+  - 彻底解决重复开单问题
+  - 代码更简洁易读
+  - 输出更清晰
+
 ### 2025-04-10 - 优化止损卖出订单成交逻辑
 - **问题**：止损触发后创建卖出订单时，使用当前价格可能无法成交（价格快速下跌）
 - **优化内容**：
