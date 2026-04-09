@@ -312,6 +312,7 @@ class TradeRecord:
     trade_id: str
     timestamp: str
     type: str  # "LONG" or "SHORT"
+    token: str  # "YES" or "NO"
     entry_price: float
     exit_price: float
     position_size: float
