@@ -625,7 +625,7 @@ class PolymarketClient:
         
         return token_ids
 
-    def get_market_prices(self, market_id: str, debug: bool = False, yes_token_id: str = None, no_token_id: str = None) -> Optional[Dict[str, float]]:
+    def get_market_prices(self, market_id: str, debug: bool = False, yes_token_id: str = None, no_token_id: str = None, max_retries: int = 3) -> Optional[Dict[str, float]]:
         """获取市场价格（使用 CLOB API 获取实时价格）
         
         Args:
@@ -633,191 +633,192 @@ class PolymarketClient:
             debug: 是否输出调试信息
             yes_token_id: YES 代币 ID（可选，用于直接查询）
             no_token_id: NO 代币 ID（可选，用于直接查询）
+            max_retries: 最大重试次数（默认3次）
         """
-        try:
-            # 如果没有提供 token_id，先获取
-            if not yes_token_id or not no_token_id:
-                token_ids = self.get_token_ids(market_id)
-                yes_token_id = token_ids.get("YES")
-                no_token_id = token_ids.get("NO")
-            
-            if not yes_token_id or not no_token_id:
-                if debug:
-                    print(f"[调试] 无法获取 token_ids")
-                return None
-            
-            # 使用 CLOB API 获取实时价格（从订单簿）
-            # CLOB API 端点: https://clob.polymarket.com/book?token_id=xxx
-            clob_base = "https://clob.polymarket.com"
-            
-            # 获取 YES 代币的订单簿
-            yes_url = f"{clob_base}/book?token_id={yes_token_id}"
-            no_url = f"{clob_base}/book?token_id={no_token_id}"
-            
-            if debug:
-                print(f"[调试] CLOB API - YES URL: {yes_url}")
-            
-            # 获取 YES 订单簿
-            yes_resp = requests.get(yes_url, timeout=5)
-            no_resp = requests.get(no_url, timeout=5)
-            
-            if yes_resp.status_code != 200 or no_resp.status_code != 200:
-                if debug:
-                    print(f"[调试] CLOB API 响应失败: YES={yes_resp.status_code}, NO={no_resp.status_code}")
-                return None
-            
-            yes_book = yes_resp.json()
-            no_book = no_resp.json()
-            
-            # 获取中间价（mid price）= (最高买价 + 最低卖价) / 2
-            # 这是更准确的市场价格表示
-            
-            yes_price = 0.5
-            no_price = 0.5
-            
-            # YES 价格：中间价
-            yes_asks = yes_book.get("asks", [])
-            yes_bids = yes_book.get("bids", [])
-            
-            if debug:
-                print(f"[调试] YES 订单簿: asks={len(yes_asks)}, bids={len(yes_bids)}")
-            
-            if yes_asks and len(yes_asks) > 0 and yes_bids and len(yes_bids) > 0:
-                # 有买卖双方：使用中间价
-                best_ask = float(yes_asks[0].get("price", "0.5"))
-                best_bid = float(yes_bids[0].get("price", "0.5"))
-                yes_price_raw = (best_ask + best_bid) / 2
-                if debug:
-                    print(f"[调试] YES 中间价: ({best_ask} + {best_bid}) / 2 = {yes_price_raw}")
-            elif yes_asks and len(yes_asks) > 0:
-                # 只有卖方：使用最低卖价
-                yes_price_raw = float(yes_asks[0].get("price", "0.5"))
-                if debug:
-                    print(f"[调试] YES 只有卖方，使用最低卖价: {yes_price_raw}")
-            elif yes_bids and len(yes_bids) > 0:
-                # 只有买方：使用最高买价
-                yes_price_raw = float(yes_bids[0].get("price", "0.5"))
-                if debug:
-                    print(f"[调试] YES 只有买方，使用最高买价: {yes_price_raw}")
-            else:
-                yes_price_raw = 0.5
-                if debug:
-                    print(f"[调试] YES 订单簿为空，使用默认价格: 0.5")
-            
-            # 统一转换为 0-1 格式
-            if yes_price_raw > 1:
-                yes_price = yes_price_raw / 100.0
-            else:
-                yes_price = yes_price_raw
-            
-            # NO 价格：中间价
-            no_asks = no_book.get("asks", [])
-            no_bids = no_book.get("bids", [])
-            
-            if debug:
-                print(f"[调试] NO 订单簿: asks={len(no_asks)}, bids={len(no_bids)}")
-            
-            if no_asks and len(no_asks) > 0 and no_bids and len(no_bids) > 0:
-                # 有买卖双方：使用中间价
-                best_ask = float(no_asks[0].get("price", "0.5"))
-                best_bid = float(no_bids[0].get("price", "0.5"))
-                no_price_raw = (best_ask + best_bid) / 2
-                if debug:
-                    print(f"[调试] NO 中间价: ({best_ask} + {best_bid}) / 2 = {no_price_raw}")
-            elif no_asks and len(no_asks) > 0:
-                # 只有卖方：使用最低卖价
-                no_price_raw = float(no_asks[0].get("price", "0.5"))
-                if debug:
-                    print(f"[调试] NO 只有卖方，使用最低卖价: {no_price_raw}")
-            elif no_bids and len(no_bids) > 0:
-                # 只有买方：使用最高买价
-                no_price_raw = float(no_bids[0].get("price", "0.5"))
-                if debug:
-                    print(f"[调试] NO 只有买方，使用最高买价: {no_price_raw}")
-            else:
-                no_price_raw = 0.5
-                if debug:
-                    print(f"[调试] NO 订单簿为空，使用默认价格: 0.5")
-            
-            # 统一转换为 0-1 格式
-            if no_price_raw > 1:
-                no_price = no_price_raw / 100.0
-            else:
-                no_price = no_price_raw
-            
-            # ==================== 价格修正逻辑 ====================
-            # Polymarket 机制：YES + NO ≈ 1.00
-            # 当订单簿不完整时，利用这个关系进行修正
-            
-            # 检查哪一方有完整订单簿（买卖双方都有）
-            yes_has_complete_book = len(yes_asks) > 0 and len(yes_bids) > 0
-            no_has_complete_book = len(no_asks) > 0 and len(no_bids) > 0
-            
-            if debug:
-                print(f"[调试] 订单簿完整性: YES={yes_has_complete_book}, NO={no_has_complete_book}")
-            
-            # 情况1：双方都有完整订单簿 - 直接使用中间价
-            if yes_has_complete_book and no_has_complete_book:
-                pass  # 上面的计算已经是正确的
-            
-            # 情况2：只有一方有完整订单簿 - 用 1 - 完整方价格估算另一方
-            elif yes_has_complete_book and not no_has_complete_book:
-                # 用 YES 价格推算 NO 价格
-                no_price = 1.0 - yes_price
-                if debug:
-                    print(f"[调试] NO 订单簿不完整，使用 1 - YES 价格: {no_price:.4f}")
-            
-            elif no_has_complete_book and not yes_has_complete_book:
-                # 用 NO 价格推算 YES 价格
-                yes_price = 1.0 - no_price
-                if debug:
-                    print(f"[调试] YES 订单簿不完整，使用 1 - NO 价格: {yes_price:.4f}")
-            
-            # 情况3：双方都没有完整订单簿 - 检查总和是否合理
-            else:
-                price_sum = yes_price + no_price
-                if abs(price_sum - 1.0) > 0.15:  # 偏差超过15%
-                    if debug:
-                        print(f"[调试] 价格总和异常: {price_sum:.4f}，使用默认值 0.5")
-                    # 使用更保守的价格
-                    yes_price = min(yes_price, 0.5)
-                    no_price = min(no_price, 0.5)
-            
-            # 最终验证：确保价格在合理范围内
-            if yes_price > 1.0:
-                yes_price = 1.0
-            if no_price > 1.0:
-                no_price = 1.0
-            if yes_price < 0:
-                yes_price = 0.01
-            if no_price < 0:
-                no_price = 0.01
-            
-            if debug:
-                print(f"[调试] 最终价格（修正后）:")
-                print(f"[调试] YES: {yes_price:.4f} ({int(yes_price*100)}%)")
-                print(f"[调试] NO: {no_price:.4f} ({int(no_price*100)}%)")
-                print(f"[调试] YES + NO = {yes_price + no_price:.4f} (正常应接近1.00)")
+        last_error = None
+        
+        for retry in range(max_retries):
+            try:
+                # 如果没有提供 token_id，先获取
+                if not yes_token_id or not no_token_id:
+                    token_ids = self.get_token_ids(market_id)
+                    yes_token_id = token_ids.get("YES")
+                    no_token_id = token_ids.get("NO")
                 
-                # 额外显示订单簿详情
-                if yes_asks and len(yes_asks) > 0:
-                    print(f"[调试] YES 卖一价: {float(yes_asks[0].get('price', 0)):.4f}")
-                if yes_bids and len(yes_bids) > 0:
-                    print(f"[调试] YES 买一价: {float(yes_bids[0].get('price', 0)):.4f}")
-                if no_asks and len(no_asks) > 0:
-                    print(f"[调试] NO 卖一价: {float(no_asks[0].get('price', 0)):.4f}")
-                if no_bids and len(no_bids) > 0:
-                    print(f"[调试] NO 买一价: {float(no_bids[0].get('price', 0)):.4f}")
-            
-            
-            return {"YES": yes_price, "NO": no_price}
-            
-        except Exception as e:
-            print(f"[!] 获取价格失败: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
-
+                if not yes_token_id or not no_token_id:
+                    if debug:
+                        print(f"[调试] 无法获取 token_ids")
+                    return None
+                
+                # 使用 CLOB API 获取实时价格（从订单簿）
+                clob_base = "https://clob.polymarket.com"
+                
+                # 获取 YES 代币的订单簿
+                yes_url = f"{clob_base}/book?token_id={yes_token_id}"
+                no_url = f"{clob_base}/book?token_id={no_token_id}"
+                
+                if debug and retry == 0:
+                    print(f"[调试] CLOB API - YES URL: {yes_url}")
+                
+                # 获取订单簿（增加超时）
+                yes_resp = requests.get(yes_url, timeout=10)
+                no_resp = requests.get(no_url, timeout=10)
+                
+                if yes_resp.status_code != 200 or no_resp.status_code != 200:
+                    if debug:
+                        print(f"[调试] CLOB API 响应失败: YES={yes_resp.status_code}, NO={no_resp.status_code}")
+                    return None
+                
+                yes_book = yes_resp.json()
+                no_book = no_resp.json()
+                
+                # 获取中间价
+                yes_price = 0.5
+                no_price = 0.5
+                
+                # YES 价格
+                yes_asks = yes_book.get("asks", [])
+                yes_bids = yes_book.get("bids", [])
+                
+                if debug:
+                    print(f"[调试] YES 订单簿: asks={len(yes_asks)}, bids={len(yes_bids)}")
+                
+                if yes_asks and len(yes_asks) > 0 and yes_bids and len(yes_bids) > 0:
+                    best_ask = float(yes_asks[0].get("price", "0.5"))
+                    best_bid = float(yes_bids[0].get("price", "0.5"))
+                    yes_price_raw = (best_ask + best_bid) / 2
+                    if debug:
+                        print(f"[调试] YES 中间价: ({best_ask} + {best_bid}) / 2 = {yes_price_raw}")
+                elif yes_asks and len(yes_asks) > 0:
+                    yes_price_raw = float(yes_asks[0].get("price", "0.5"))
+                    if debug:
+                        print(f"[调试] YES 只有卖方，使用最低卖价: {yes_price_raw}")
+                elif yes_bids and len(yes_bids) > 0:
+                    yes_price_raw = float(yes_bids[0].get("price", "0.5"))
+                    if debug:
+                        print(f"[调试] YES 只有买方，使用最高买价: {yes_price_raw}")
+                else:
+                    yes_price_raw = 0.5
+                    if debug:
+                        print(f"[调试] YES 订单簿为空，使用默认价格: 0.5")
+                
+                if yes_price_raw > 1:
+                    yes_price = yes_price_raw / 100.0
+                else:
+                    yes_price = yes_price_raw
+                
+                # NO 价格
+                no_asks = no_book.get("asks", [])
+                no_bids = no_book.get("bids", [])
+                
+                if debug:
+                    print(f"[调试] NO 订单簿: asks={len(no_asks)}, bids={len(no_bids)}")
+                
+                if no_asks and len(no_asks) > 0 and no_bids and len(no_bids) > 0:
+                    best_ask = float(no_asks[0].get("price", "0.5"))
+                    best_bid = float(no_bids[0].get("price", "0.5"))
+                    no_price_raw = (best_ask + best_bid) / 2
+                    if debug:
+                        print(f"[调试] NO 中间价: ({best_ask} + {best_bid}) / 2 = {no_price_raw}")
+                elif no_asks and len(no_asks) > 0:
+                    no_price_raw = float(no_asks[0].get("price", "0.5"))
+                    if debug:
+                        print(f"[调试] NO 只有卖方，使用最低卖价: {no_price_raw}")
+                elif no_bids and len(no_bids) > 0:
+                    no_price_raw = float(no_bids[0].get("price", "0.5"))
+                    if debug:
+                        print(f"[调试] NO 只有买方，使用最高买价: {no_price_raw}")
+                else:
+                    no_price_raw = 0.5
+                    if debug:
+                        print(f"[调试] NO 订单簿为空，使用默认价格: 0.5")
+                
+                if no_price_raw > 1:
+                    no_price = no_price_raw / 100.0
+                else:
+                    no_price = no_price_raw
+                
+                # 价格修正逻辑
+                yes_has_complete_book = len(yes_asks) > 0 and len(yes_bids) > 0
+                no_has_complete_book = len(no_asks) > 0 and len(no_bids) > 0
+                
+                if debug:
+                    print(f"[调试] 订单簿完整性: YES={yes_has_complete_book}, NO={no_has_complete_book}")
+                
+                if yes_has_complete_book and no_has_complete_book:
+                    pass
+                elif yes_has_complete_book and not no_has_complete_book:
+                    no_price = 1.0 - yes_price
+                    if debug:
+                        print(f"[调试] NO 订单簿不完整，使用 1 - YES 价格: {no_price:.4f}")
+                elif no_has_complete_book and not yes_has_complete_book:
+                    yes_price = 1.0 - no_price
+                    if debug:
+                        print(f"[调试] YES 订单簿不完整，使用 1 - NO 价格: {yes_price:.4f}")
+                else:
+                    price_sum = yes_price + no_price
+                    if abs(price_sum - 1.0) > 0.15:
+                        if debug:
+                            print(f"[调试] 价格总和异常: {price_sum:.4f}，使用默认值 0.5")
+                        yes_price = min(yes_price, 0.5)
+                        no_price = min(no_price, 0.5)
+                
+                # 最终验证
+                if yes_price > 1.0:
+                    yes_price = 1.0
+                if no_price > 1.0:
+                    no_price = 1.0
+                if yes_price < 0:
+                    yes_price = 0.01
+                if no_price < 0:
+                    no_price = 0.01
+                
+                if debug:
+                    print(f"[调试] 最终价格（修正后）:")
+                    print(f"[调试] YES: {yes_price:.4f} ({int(yes_price*100)}%)")
+                    print(f"[调试] NO: {no_price:.4f} ({int(no_price*100)}%)")
+                    print(f"[调试] YES + NO = {yes_price + no_price:.4f} (正常应接近1.00)")
+                    
+                    if yes_asks and len(yes_asks) > 0:
+                        print(f"[调试] YES 卖一价: {float(yes_asks[0].get('price', 0)):.4f}")
+                    if yes_bids and len(yes_bids) > 0:
+                        print(f"[调试] YES 买一价: {float(yes_bids[0].get('price', 0)):.4f}")
+                    if no_asks and len(no_asks) > 0:
+                        print(f"[调试] NO 卖一价: {float(no_asks[0].get('price', 0)):.4f}")
+                    if no_bids and len(no_bids) > 0:
+                        print(f"[调试] NO 买一价: {float(no_bids[0].get('price', 0)):.4f}")
+                
+                return {"YES": yes_price, "NO": no_price}
+                
+            except requests.exceptions.ConnectionError as e:
+                last_error = e
+                if retry < max_retries - 1:
+                    wait_time = (retry + 1) * 2
+                    print(f"[网络] 连接错误，{wait_time}秒后重试 ({retry + 1}/{max_retries}): {e}")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    print(f"[错误] 获取价格失败（已重试{max_retries}次）: {e}")
+                    return None
+                    
+            except requests.exceptions.Timeout as e:
+                last_error = e
+                if retry < max_retries - 1:
+                    wait_time = (retry + 1) * 2
+                    print(f"[网络] 请求超时，{wait_time}秒后重试 ({retry + 1}/{max_retries}): {e}")
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    print(f"[错误] 获取价格超时（已重试{max_retries}次）: {e}")
+                    return None
+                    
+            except Exception as e:
+                print(f"[!] 获取价格失败: {e}")
+                import traceback
+                traceback.print_exc()
+                return None
+        
+        return None
     # ==================== 余额方法 ====================
 
     def check_and_initialize_allowance(self) -> Dict[str, Any]:

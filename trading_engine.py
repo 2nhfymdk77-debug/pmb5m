@@ -21,6 +21,7 @@ import random
 import logging
 import math
 import sys
+import requests
 from datetime import datetime
 from typing import Optional, Dict, List, Any, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1090,8 +1091,17 @@ class TradingEngine:
 
                 time.sleep(0.05)
 
+            except requests.exceptions.ConnectionError as e:
+                print(f"\n[网络] 连接错误，等待恢复: {e}")
+                time.sleep(2)  # 网络错误时等待更长
+                
+            except requests.exceptions.Timeout as e:
+                print(f"\n[网络] 请求超时，等待重试: {e}")
+                time.sleep(1)
+                
             except Exception as e:
-                time.sleep(0.05)
+                print(f"\n[错误] 价格监控异常: {e}")
+                time.sleep(0.5)
 
         print(f"\n[监控] 超时未触发")
         self.waiting_for_entry = False
@@ -1759,8 +1769,17 @@ class TradingEngine:
 
                 time.sleep(0.05)
 
-            except:
-                time.sleep(0.05)
+            except requests.exceptions.ConnectionError as e:
+                print(f"\n[网络] 连接错误，等待恢复: {e}")
+                time.sleep(2)  # 网络错误时等待更长
+                
+            except requests.exceptions.Timeout as e:
+                print(f"\n[网络] 请求超时，等待重试: {e}")
+                time.sleep(1)
+                
+            except Exception as e:
+                print(f"\n[错误] 持仓监控异常: {e}")
+                time.sleep(0.5)
 
         print(f"\n[监控] 周期结束")
         return "TIMEOUT"
