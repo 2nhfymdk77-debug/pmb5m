@@ -745,8 +745,56 @@ class PolymarketClient:
             else:
                 no_price = no_price_raw
             
+            # ==================== 价格修正逻辑 ====================
+            # Polymarket 机制：YES + NO ≈ 1.00
+            # 当订单簿不完整时，利用这个关系进行修正
+            
+            # 检查哪一方有完整订单簿（买卖双方都有）
+            yes_has_complete_book = yes_asks and len(yes_asks) > 0 and yes_bids and len(yes_bids) > 0
+            no_has_complete_book = no_asks and len(no_asks) > 0 and no_bids and len(no_bids) > 0
+            
             if debug:
-                print(f"[调试] CLOB API 实时价格（中间价）:")
+                print(f"[调试] 订单簿完整性: YES={yes_has_complete_book}, NO={no_has_complete_book}")
+            
+            # 情况1：双方都有完整订单簿 - 直接使用中间价
+            if yes_has_complete_book and no_has_complete_book:
+                pass  # 上面的计算已经是正确的
+            
+            # 情况2：只有一方有完整订单簿 - 用 1 - 完整方价格估算另一方
+            elif yes_has_complete_book and not no_has_complete_book:
+                # 用 YES 价格推算 NO 价格
+                no_price = 1.0 - yes_price
+                if debug:
+                    print(f"[调试] NO 订单簿不完整，使用 1 - YES 价格: {no_price:.4f}")
+            
+            elif no_has_complete_book and not yes_has_complete_book:
+                # 用 NO 价格推算 YES 价格
+                yes_price = 1.0 - no_price
+                if debug:
+                    print(f"[调试] YES 订单簿不完整，使用 1 - NO 价格: {yes_price:.4f}")
+            
+            # 情况3：双方都没有完整订单簿 - 检查总和是否合理
+            else:
+                price_sum = yes_price + no_price
+                if abs(price_sum - 1.0) > 0.15:  # 偏差超过15%
+                    if debug:
+                        print(f"[调试] 价格总和异常: {price_sum:.4f}，使用默认值 0.5")
+                    # 使用更保守的价格
+                    yes_price = min(yes_price, 0.5)
+                    no_price = min(no_price, 0.5)
+            
+            # 最终验证：确保价格在合理范围内
+            if yes_price > 1.0:
+                yes_price = 1.0
+            if no_price > 1.0:
+                no_price = 1.0
+            if yes_price < 0:
+                yes_price = 0.01
+            if no_price < 0:
+                no_price = 0.01
+            
+            if debug:
+                print(f"[调试] 最终价格（修正后）:")
                 print(f"[调试] YES: {yes_price:.4f} ({int(yes_price*100)}%)")
                 print(f"[调试] NO: {no_price:.4f} ({int(no_price*100)}%)")
                 print(f"[调试] YES + NO = {yes_price + no_price:.4f} (正常应接近1.00)")
