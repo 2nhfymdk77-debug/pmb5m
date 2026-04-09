@@ -544,14 +544,6 @@ class TradingEngine:
                         print(f"[安全检查] 更新持仓数量: {position_size} → {actual_balance}")
                         self.current_position["size"] = actual_balance
                         position_size = actual_balance
-                    
-                    # 检查余额是否足够卖出（最小 5 股）
-                    MIN_SELL_SHARES = 5
-                    if actual_balance > 0 and actual_balance < MIN_SELL_SHARES:
-                        print(f"[安全检查] 余额 {actual_balance:.4f} 股 < 最小卖出股数 {MIN_SELL_SHARES}")
-                        print(f"[安全检查] 跳过卖出，等待事件结算或累积更多代币")
-                        # 清除持仓记录，让程序继续运行
-                        self.current_position = None
                 
                 # 如果仍有持仓且代币余额 > 0，检查事件是否已结算
                 if self.current_position and token_id:
@@ -583,48 +575,41 @@ class TradingEngine:
                             # 使用已更新的 position_size
                             print(f"[安全检查] 强制卖出 {token} {position_size}股 @ {sell_price}%")
                             
-                            # 检查最小股数限制
-                            MIN_SELL_SHARES = 5
-                            if position_size < MIN_SELL_SHARES:
-                                print(f"[安全检查] 股数 {position_size:.4f} < 最小卖出股数 {MIN_SELL_SHARES}")
-                                print(f"[安全检查] 跳过强制卖出，等待事件结算")
-                                self.current_position = None
-                            else:
-                                try:
-                                    sell_order = self.client.create_order(
-                                        token_id=token_id,
-                                        price=sell_price,
-                                        size=position_size,
-                                        side="SELL",
-                                        order_type="GTC",
-                                    )
-                                    
-                                    if sell_order and sell_order.get("success") != False:
-                                        # 等待成交
-                                        order_id = sell_order.get("orderID") or sell_order.get("order_id", "")
-                                        start_wait = time.time()
-                                        while time.time() - start_wait < 5:
-                                            try:
-                                                order_status = self.client.get_order(order_id)
-                                                if order_status:
-                                                    filled = order_status.get("filled_size", 0) or order_status.get("size_filled", 0) or 0
-                                                    if filled > 0:
-                                                        actual_price = order_status.get("price") or order_status.get("avg_price") or sell_price / 100.0
-                                                        if isinstance(actual_price, (int, float)) and actual_price > 1:
-                                                            actual_price = actual_price / 100.0
-                                                        self.close_position(
-                                                            self.current_position["type"],
-                                                            position_size,
-                                                            entry_price,
-                                                            actual_price,
-                                                            "FORCED_CLOSE"
-                                                        )
-                                                        break
-                                            except:
-                                                pass
-                                            time.sleep(0.5)
-                                except Exception as e:
-                                    print(f"[安全检查] 强制卖出失败: {e}")
+                            try:
+                                sell_order = self.client.create_order(
+                                    token_id=token_id,
+                                    price=sell_price,
+                                    size=position_size,
+                                    side="SELL",
+                                    order_type="GTC",
+                                )
+                                
+                                if sell_order and sell_order.get("success") != False:
+                                    # 等待成交
+                                    order_id = sell_order.get("orderID") or sell_order.get("order_id", "")
+                                    start_wait = time.time()
+                                    while time.time() - start_wait < 5:
+                                        try:
+                                            order_status = self.client.get_order(order_id)
+                                            if order_status:
+                                                filled = order_status.get("filled_size", 0) or order_status.get("size_filled", 0) or 0
+                                                if filled > 0:
+                                                    actual_price = order_status.get("price") or order_status.get("avg_price") or sell_price / 100.0
+                                                    if isinstance(actual_price, (int, float)) and actual_price > 1:
+                                                        actual_price = actual_price / 100.0
+                                                    self.close_position(
+                                                        self.current_position["type"],
+                                                        position_size,
+                                                        entry_price,
+                                                        actual_price,
+                                                        "FORCED_CLOSE"
+                                                    )
+                                                    break
+                                        except:
+                                            pass
+                                        time.sleep(0.5)
+                            except Exception as e:
+                                print(f"[安全检查] 强制卖出失败: {e}")
             except Exception as e:
                 print(f"[错误] 安全检查失败: {e}")
 
@@ -1088,15 +1073,9 @@ class TradingEngine:
         raw_size = position_size / current_price
         actual_size = math.ceil(raw_size)
         
-        # 确保订单金额 >= $1
+        # 确保订单金额 >= $1（Polymarket 最小订单金额）
         if actual_size * current_price < 1.0:
             actual_size = math.ceil(1.0 / current_price)
-        
-        # Polymarket 要求最小 5 股
-        MIN_SHARES = 5
-        if actual_size < MIN_SHARES:
-            actual_size = MIN_SHARES
-            print(f"[买入] 调整股数到最小值: {MIN_SHARES} 股")
         
         try:
             # FOK 订单
@@ -1782,11 +1761,6 @@ class TradingEngine:
         if actual_balance <= 0:
             return None
         
-        # Polymarket 最小股数限制
-        MIN_SELL_SHARES = 5
-        if position_size < MIN_SELL_SHARES:
-            return None
-        
         # GTD 订单：5 分钟后自动过期（+60秒安全缓冲）
         duration = self.config.trade_cycle_minutes * 60
         expiration = int(time.time()) + 60 + duration
@@ -2053,14 +2027,6 @@ class TradingEngine:
                 elif actual_balance < position_size:
                     position_size = actual_balance
                     self.current_position["size"] = actual_balance
-                
-                # 检查最小股数限制（在获取实际余额后）
-                MIN_SELL_SHARES = 5
-                if position_size < MIN_SELL_SHARES:
-                    print(f"[警告] 股数 {position_size:.4f} < 最小卖出股数 {MIN_SELL_SHARES}，等待事件结算")
-                    # 清除持仓，等待事件结算
-                    self.current_position = None
-                    return
                 
                 # 卖出重试机制：最多重试3次
                 max_retries = 3
