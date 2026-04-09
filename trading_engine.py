@@ -1137,13 +1137,11 @@ class TradingEngine:
 
     def _monitor_price_for_entry(self, position_size: float, max_wait: int) -> bool:
         """
-        监控价格，等待达到目标价时买入（优化版：智能频率调整 + 极速模式）
+        监控价格，等待达到目标价时买入（最低延时版）
 
         【优化策略】：
-        - 当价格远离目标价时：降低检查频率（1秒），减少 API 调用
-        - 当价格接近目标价时：提高检查频率（0.1秒），提高实时性
-        - 当价格非常接近时：进入极速模式（0.05秒），最低延迟
-        - 动态调整检查频率，平衡实时性和 API 调用
+        - 统一使用最低延时检查（0.05秒 = 50毫秒）
+        - 追求极致实时性，不考虑API调用次数
 
         Args:
             position_size: 开仓金额
@@ -1157,6 +1155,7 @@ class TradingEngine:
 
         entry_target = self.entry_target_price
         print(f"\n[监控] 开始监控价格，等待涨到 {int(entry_target * 100)}%...")
+        print(f"[监控] 检查间隔: 0.05秒（最低延时）")
 
         start_time = time.time()
         last_log_time = 0
@@ -1165,42 +1164,21 @@ class TradingEngine:
             try:
                 prices = self.client.get_market_prices(self.config.market_id)
                 if not prices:
-                    time.sleep(0.5)
+                    time.sleep(0.05)
                     continue
 
                 yes_price = prices.get("YES", 0.5)
                 no_price = prices.get("NO", 0.5)
 
-                # 计算距离目标价的距离
-                yes_distance = abs(yes_price - entry_target)
-                no_distance = abs(no_price - entry_target)
-                min_distance = min(yes_distance, no_distance)
-
-                # 【动态调整检查频率】
-                # 距离 > 10%: 1秒检查一次（低频）- 省资源
-                # 距离 5-10%: 0.5秒检查一次（中频）- 平衡
-                # 距离 2-5%: 0.1秒检查一次（高频）- 提高实时性
-                # 距离 < 2%: 0.05秒检查一次（极速）- 最低延迟
-                if min_distance > 0.10:
-                    check_interval = 1.0
-                    freq_display = "低频"
-                elif min_distance > 0.05:
-                    check_interval = 0.5
-                    freq_display = "中频"
-                elif min_distance > 0.02:
-                    check_interval = 0.1
-                    freq_display = "高频"
-                else:
-                    check_interval = 0.05  # 极速模式：50毫秒
-                    freq_display = "极速"
-
-                # 每 2 秒输出一次价格（极速模式下每 0.5 秒输出）
-                log_interval = 0.5 if check_interval == 0.05 else 2
+                # 每 1 秒输出一次价格（避免刷屏）
                 current_time = time.time()
-                if current_time - last_log_time >= log_interval:
+                if current_time - last_log_time >= 1.0:
                     elapsed = int(current_time - start_time)
                     remaining = max_wait - elapsed
-                    print(f"\r[监控] YES={int(yes_price*100)}% NO={int(no_price*100)}% | 距离{int(min_distance*100)}% | {freq_display}({check_interval}s) | 剩余 {remaining}s    ", end="", flush=True)
+                    yes_dist = abs(yes_price - entry_target)
+                    no_dist = abs(no_price - entry_target)
+                    min_dist = min(yes_dist, no_dist)
+                    print(f"\r[监控] YES={int(yes_price*100)}% NO={int(no_price*100)}% | 距离{int(min_dist*100)}% | 剩余 {remaining}s    ", end="", flush=True)
                     last_log_time = current_time
 
                 # 检查是否达到目标价
@@ -1223,12 +1201,12 @@ class TradingEngine:
                     self._execute_market_buy(token, position_size, price)
                     return True
 
-                # 使用动态调整的检查间隔
-                time.sleep(check_interval)
+                # 最低延时检查：0.05 秒
+                time.sleep(0.05)
 
             except Exception as e:
                 print(f"\n[错误] 监控价格失败: {e}")
-                time.sleep(0.5)
+                time.sleep(0.05)
 
         print(f"\n[监控] 超时未触发，跳过此周期")
         self.waiting_for_entry = False
@@ -1806,7 +1784,7 @@ class TradingEngine:
 
     def monitor_position(self, max_wait: float) -> Optional[str]:
         """
-        监控持仓：止损、止盈或到期
+        监控持仓：止损、止盈或到期（最低延时版）
 
         【策略说明】：
         - 止损：价格监控方式，当价格 <= 止损价时主动卖出
@@ -1816,6 +1794,7 @@ class TradingEngine:
         【重要】：
         - 止损只能通过价格监控实现（限价卖单无法实现止损）
         - 止盈有限价卖单和价格监控双重保障
+        - 统一使用最低延时检查（0.05秒 = 50毫秒）
 
         Args:
             max_wait: 最大监控时间（秒）
@@ -1846,6 +1825,7 @@ class TradingEngine:
         print(f"  止损价格: {stop_loss_display:.2f} ({int(stop_loss_display*100)}%) - 价格监控")
         print(f"  止盈价格: {take_profit_display:.2f} ({int(take_profit_display*100)}%) - 限价单 + 价格监控")
         print(f"  监控时长: {max_wait:.1f}秒")
+        print(f"[监控] 检查间隔: 0.05秒（最低延时）")
 
         # 监控止损止盈
         start_time = time.time()
@@ -1860,7 +1840,7 @@ class TradingEngine:
                 # 获取当前价格
                 prices = self.client.get_market_prices(self.config.market_id)
                 if not prices:
-                    time.sleep(0.5)
+                    time.sleep(0.05)
                     continue
 
                 current_price = prices.get(token, 0.5)
@@ -1907,18 +1887,19 @@ class TradingEngine:
                     except Exception:
                         pass
 
-                # 每 2 秒输出一次状态
-                if current_time - last_log_time >= 2.0:
+                # 每 1 秒输出一次状态（避免刷屏）
+                if current_time - last_log_time >= 1.0:
                     elapsed = int(current_time - start_time)
                     remaining = int(max_wait - elapsed)
                     print(f"\r[监控] {token}: {current_price:.2f} | 止损{stop_loss_display:.2f} 止盈{take_profit_display:.2f} | 剩余{remaining}s    ", end="", flush=True)
                     last_log_time = current_time
 
-                time.sleep(0.5)  # 每 0.5 秒检查一次
+                # 最低延时检查：0.05 秒
+                time.sleep(0.05)
 
             except Exception as e:
                 print(f"\n[错误] 监控失败: {e}")
-                time.sleep(0.5)
+                time.sleep(0.05)
 
         # 周期结束，未触发止损止盈
         print(f"\r[监控] 周期结束，未触发止损止盈                    ")
