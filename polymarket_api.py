@@ -765,6 +765,7 @@ class PolymarketClient:
             print(f"  price: {api_price}")
             print(f"  size: {size}")
             print(f"  side: {side.upper()}")
+            print(f"  order_type: {order_type} (限价单)")
             print(f"  tick_size: {tick_size}")
             print(f"  neg_risk: {neg_risk}")
 

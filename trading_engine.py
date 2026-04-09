@@ -851,6 +851,8 @@ class TradingEngine:
         - YES 和 NO 是两个不同的代币
         - 同时挂两个买入单：BUY YES @ 75 和 BUY NO @ 75
         - 等待订单成交，取消未成交的一侧
+        
+        **所有订单都是限价单（GTC），不是市价单**
 
         注意：这里没有做空操作，都是做多！
         """
@@ -1160,6 +1162,8 @@ class TradingEngine:
         根据 Polymarket 官方文档：
         - 使用 GTD 订单确保在周期结束时自动过期
         
+        **使用限价单（GTD），不是市价单**
+        
         Args:
             position_size: 持仓数量
             
@@ -1228,6 +1232,8 @@ class TradingEngine:
         
         根据 Polymarket 官方文档：
         - 使用 GTD 订单确保在周期结束时自动过期
+        
+        **使用限价单（GTD），不是市价单**
         
         Args:
             position_size: 持仓数量
@@ -1358,59 +1364,66 @@ class TradingEngine:
         last_price_log = 0
         last_check_time = start_time
 
+        print(f"\n[监控] 开始监控止损止盈订单...")
+        
         while time.time() - start_time < max_wait:
             current_time = time.time()
+            elapsed_since_last_check = current_time - last_check_time
             
-            # 检查止损订单是否成交
-            if self.stop_loss_order:
-                try:
-                    order_id = self.stop_loss_order.get("orderID")
-                    order_status = self.client.get_order(order_id)
-                    if order_status:
-                        # 检查多个可能的填充量字段名
-                        filled = (
-                            order_status.get("filled_size", 0) or
-                            order_status.get("size_filled", 0) or
-                            order_status.get("fills", 0) or
-                            order_status.get("fill_amount", 0) or
-                            0
-                        )
-                        if filled > 0:
-                            print(f"\r[触发] [OK] 止损订单已成交!                      ")
-                            # 取消另一个订单
-                            if self.take_profit_order:
-                                self._cancel_single_order(self.take_profit_order)
-                                self.take_profit_order = None
-                            return "STOP_LOSS"
-                except Exception:
-                    pass
+            # 每2秒检查一次订单状态（减少API调用）
+            if elapsed_since_last_check >= 2.0:
+                # 检查止损订单是否成交
+                if self.stop_loss_order:
+                    try:
+                        order_id = self.stop_loss_order.get("orderID")
+                        order_status = self.client.get_order(order_id)
+                        if order_status:
+                            # 检查多个可能的填充量字段名
+                            filled = (
+                                order_status.get("filled_size", 0) or
+                                order_status.get("size_filled", 0) or
+                                order_status.get("fills", 0) or
+                                order_status.get("fill_amount", 0) or
+                                0
+                            )
+                            if filled > 0:
+                                print(f"\r\n[触发] ✓ 止损订单已成交!                      ")
+                                # 取消另一个订单
+                                if self.take_profit_order:
+                                    self._cancel_single_order(self.take_profit_order)
+                                    self.take_profit_order = None
+                                return "STOP_LOSS"
+                    except Exception:
+                        pass
 
-            # 检查止盈订单是否成交
-            if self.take_profit_order:
-                try:
-                    order_id = self.take_profit_order.get("orderID")
-                    order_status = self.client.get_order(order_id)
-                    if order_status:
-                        # 检查多个可能的填充量字段名
-                        filled = (
-                            order_status.get("filled_size", 0) or
-                            order_status.get("size_filled", 0) or
-                            order_status.get("fills", 0) or
-                            order_status.get("fill_amount", 0) or
-                            0
-                        )
-                        if filled > 0:
-                            print(f"\r[触发] [OK] 止盈订单已成交!                      ")
-                            # 取消另一个订单
-                            if self.stop_loss_order:
-                                self._cancel_single_order(self.stop_loss_order)
-                                self.stop_loss_order = None
-                            return "TAKE_PROFIT"
-                except Exception:
-                    pass
+                # 检查止盈订单是否成交
+                if self.take_profit_order:
+                    try:
+                        order_id = self.take_profit_order.get("orderID")
+                        order_status = self.client.get_order(order_id)
+                        if order_status:
+                            # 检查多个可能的填充量字段名
+                            filled = (
+                                order_status.get("filled_size", 0) or
+                                order_status.get("size_filled", 0) or
+                                order_status.get("fills", 0) or
+                                order_status.get("fill_amount", 0) or
+                                0
+                            )
+                            if filled > 0:
+                                print(f"\r\n[触发] ✓ 止盈订单已成交!                      ")
+                                # 取消另一个订单
+                                if self.stop_loss_order:
+                                    self._cancel_single_order(self.stop_loss_order)
+                                    self.stop_loss_order = None
+                                return "TAKE_PROFIT"
+                    except Exception:
+                        pass
+                
+                last_check_time = current_time
 
-            # 每秒更新一次价格
-            if current_time - last_price_log >= 1:
+            # 每3秒更新一次价格显示（进一步减少API调用）
+            if current_time - last_price_log >= 3.0:
                 try:
                     prices = self.client.get_market_prices(self.config.market_id)
                     if prices:
@@ -1420,12 +1433,12 @@ class TradingEngine:
                     
                     elapsed = int(current_time - start_time)
                     remaining = int(max_wait - (current_time - start_time))
-                    print(f"\r[监控] {format_time_remaining(remaining)} | {token}: ${current_price:.2f}    ", end="", flush=True)
+                    print(f"\r[监控] 剩余{remaining}秒 | {token}: ${current_price:.2f}    ", end="", flush=True)
                     last_price_log = current_time
                 except Exception:
                     pass
 
-            time.sleep(1)
+            time.sleep(0.5)  # 主循环间隔0.5秒
 
         # 周期结束，未触发止损止盈
         print(f"\r[监控] 周期结束，未触发止损止盈                    ")
