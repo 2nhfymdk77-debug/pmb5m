@@ -1071,8 +1071,8 @@ class TradingEngine:
                 if can_buy_yes or can_buy_no:
                     # 价格在合理范围内，可以买入
                     if can_buy_yes and can_buy_no:
-                        # 两边都可以买，选择价格更高的
-                        token = "YES" if yes_price > no_price else "NO"
+                        # 两边都可以买，选择价格更高的（相等时选YES）
+                        token = "YES" if yes_price >= no_price else "NO"
                         price = max(yes_price, no_price)
                     elif can_buy_yes:
                         token = "YES"
