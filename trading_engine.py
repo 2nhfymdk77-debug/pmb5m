@@ -694,13 +694,7 @@ class TradingEngine:
                     # 重置继续监控标志
                     self._continue_monitoring = False
                     
-                    # 如果没有止盈订单，重新设置
-                    if not self.take_profit_order:
-                        position_size = self.current_position.get("size", 0)
-                        if position_size > 0:
-                            self.place_take_profit_order(position_size)
-                    
-                    # 监控止损止盈
+                    # 监控止损止盈（价格监控方式）
                     exit_reason = self.monitor_position(remaining_time)
                     
                     if exit_reason:
@@ -1738,91 +1732,28 @@ class TradingEngine:
     
     def place_take_profit_order(self, position_size: float) -> Optional[str]:
         """
-        设置止盈单（卖出持仓代币）
-        
-        根据 Polymarket 官方文档：
-        - 使用 GTD 订单确保在周期结束时自动过期
-        
-        **使用限价单（GTD），不是市价单**
-        
+        设置止盈（价格监控方式，不创建订单）
+
+        【重要】止盈和止损都使用价格监控方式！
+
+        原因：
+        1. 止损无法用限价单实现（限价卖单 @ X = 以不低于 X 的价格卖出）
+        2. 止盈限价单可能部分成交，导致剩余股数不足最小金额
+        3. 统一使用价格监控，达到目标价时直接市价卖出，逻辑更清晰
+
+        【解决方案】：
+        - 不创建止盈订单
+        - 使用价格监控，当价格 >= 止盈价时主动卖出
+        - 在 monitor_position() 中实现
+
         Args:
             position_size: 持仓数量
-            
+
         Returns:
-            止盈单订单ID 或 None
+            None（不创建订单）
         """
-        if not self.current_position or not self.current_position.get("token_id"):
-            return None
-        
-        position = self.current_position
-        token_id = position["token_id"]
-        token = position["token"]
-        entry_price = position["entry_price"]
-        take_profit_price = self.config.take_profit
-        take_profit_display = take_profit_price / 100.0 if take_profit_price > 1 else take_profit_price
-        
-        # 检查代币余额（等待最多 10 秒）
-        max_wait = 10
-        actual_balance = 0
-        for i in range(max_wait):
-            token_balance = self.client.get_token_balance(token_id)
-            
-            if token_balance >= position_size:
-                actual_balance = token_balance
-                break
-            elif token_balance > 0:
-                # 有余额但不足，记录实际余额
-                actual_balance = token_balance
-            
-            time.sleep(1)
-        
-        # 如果余额不足，更新持仓数量为实际余额
-        if actual_balance > 0 and actual_balance < position_size:
-            self.current_position["size"] = actual_balance
-            position_size = actual_balance
-        
-        if actual_balance <= 0:
-            return None
-        
-        # 检查订单金额是否足够（Polymarket 最小订单金额 ~$1）
-        min_shares_needed = 1.0 / (take_profit_price / 100.0)
-        if position_size < min_shares_needed:
-            print(f"[止盈] 股数不足最小金额（{position_size:.4f}股 < {min_shares_needed:.4f}股），跳过挂止盈单")
-            return None
-        
-        # GTD 订单：5 分钟后自动过期（+60秒安全缓冲）
-        duration = self.config.trade_cycle_minutes * 60
-        expiration = int(time.time()) + 60 + duration
-        
-        try:
-            # 卖出持仓代币 @ 止盈价格
-            response = self.client.create_order(
-                token_id=token_id,
-                price=take_profit_price,
-                size=position_size,
-                side="SELL",
-                order_type="GTD",  # Good Till Date - 自动过期
-                expiration=expiration,
-            )
-            
-            if response and response.get("success") != False:
-                order_id = response.get("orderID") or response.get("order_id", "")
-                if order_id:
-                    self.take_profit_order = {
-                        "orderID": order_id,
-                        "type": "TAKE_PROFIT",
-                        "token": token,
-                        "price": take_profit_price,
-                        "size": position_size,
-                    }
-                    print(f"[止盈] 已挂单: {token} @ {int(take_profit_display*100)}%")
-                    return order_id
-            
-            return None
-            
-        except Exception as e:
-            print(f"[止盈] [X] 止盈单设置失败: {e}")
-            return None
+        # 不创建止盈订单，使用价格监控代替
+        return None
 
     def monitor_position(self, max_wait: float) -> Optional[str]:
         """监控持仓：止损、止盈或到期"""
@@ -1852,57 +1783,15 @@ class TradingEngine:
 
                 current_price = prices.get(token, 0.5)
 
-                # 止损检查
+                # 止损检查：价格 <= 止损价
                 if current_price <= stop_loss_price:
                     print(f"\n[止损] {token} 价格 {int(current_price*100)}% <= {int(stop_loss_price*100)}%")
-                    if self.take_profit_order:
-                        self._cancel_single_order(self.take_profit_order)
-                        self.take_profit_order = None
                     return "STOP_LOSS"
 
-                # 止盈检查
+                # 止盈检查：价格 >= 止盈价
                 if current_price >= take_profit_price:
                     print(f"\n[止盈] {token} 价格 {int(current_price*100)}% >= {int(take_profit_price*100)}%")
-                    if self.take_profit_order:
-                        self._cancel_single_order(self.take_profit_order)
-                        self.take_profit_order = None
                     return "TAKE_PROFIT"
-
-                # 止盈订单成交检查
-                if self.take_profit_order:
-                    try:
-                        order_id = self.take_profit_order.get("orderID")
-                        order_status = self.client.get_order(order_id)
-                        if order_status:
-                            filled = (
-                                order_status.get("filled_size", 0) or
-                                order_status.get("size_filled", 0) or
-                                order_status.get("fills", 0) or
-                                order_status.get("fill_amount", 0) or
-                                0
-                            )
-                            if filled > 0:
-                                print(f"\n[止盈] 订单已成交")
-                                take_profit_price_raw = (
-                                    order_status.get("price") or
-                                    order_status.get("avg_price") or
-                                    order_status.get("filled_price") or
-                                    self.config.take_profit
-                                )
-                                # 确保转换为数值
-                                if isinstance(take_profit_price_raw, str):
-                                    try:
-                                        take_profit_price_raw = float(take_profit_price_raw)
-                                    except:
-                                        take_profit_price_raw = self.config.take_profit
-                                # 转换为小数格式
-                                if isinstance(take_profit_price_raw, (int, float)) and take_profit_price_raw > 1:
-                                    take_profit_price_raw = take_profit_price_raw / 100.0
-                                self.take_profit_filled_price = take_profit_price_raw
-                                self.take_profit_order = None
-                                return "TAKE_PROFIT_FILLED"
-                    except:
-                        pass
 
                 # 每 1 秒输出一次状态
                 if current_time - last_log_time >= 1.0:
@@ -1968,12 +1857,6 @@ class TradingEngine:
                 exit_price = to_float_price(prices.get(token, self.config.take_profit))
             except:
                 exit_price = to_float_price(self.config.take_profit)
-        elif exit_reason == "TAKE_PROFIT_FILLED":
-            exit_price = getattr(self, 'take_profit_filled_price', to_float_price(self.config.take_profit))
-            if isinstance(exit_price, str):
-                exit_price = float(exit_price)
-            if exit_price > 1:
-                exit_price = exit_price / 100.0
         elif exit_reason == "TIMEOUT":
             event_result = self.get_event_result()
             if event_result:
@@ -1997,17 +1880,12 @@ class TradingEngine:
         else:
             exit_price = entry_price
 
-        # 卖出持仓代币（如果是 TAKE_PROFIT_FILLED 或事件已结算则跳过）
+        # 卖出持仓代币（如果事件已结算则跳过）
         sell_success = False  # 标记卖出是否成功
         
         # 检查是否需要卖出
         skip_sell = False
-        if exit_reason == "TAKE_PROFIT_FILLED":
-            trade_amount = position_size * exit_price
-            print(f"[平仓] 止盈已成交 {position_size}股 @ {int(exit_price*100)}% | 金额: ${trade_amount:.2f}")
-            sell_success = True
-            skip_sell = True
-        elif exit_reason == "TIMEOUT" and getattr(self, '_event_settled', False):
+        if exit_reason == "TIMEOUT" and getattr(self, '_event_settled', False):
             # 事件已结算，不需要卖出，直接计算盈亏
             trade_amount = position_size * exit_price
             print(f"[清算] 事件已结算，直接计算盈亏: {position_size}股 @ {int(exit_price*100)}% | 金额: ${trade_amount:.2f}")
@@ -2023,46 +1901,8 @@ class TradingEngine:
                 
                 # 先用实际余额更新 position_size
                 if actual_balance <= 0:
-                    # 代币已不存在，可能是止盈订单成交或其他原因
-                    # 先检查是否有记录的止盈成交价格
-                    if hasattr(self, 'take_profit_filled_price') and self.take_profit_filled_price:
-                        exit_price = self.take_profit_filled_price
-                        if isinstance(exit_price, (int, float)) and exit_price > 1:
-                            exit_price = exit_price / 100.0
-                        sell_success = True
-                    # 再检查止盈订单是否成交
-                    elif self.take_profit_order:
-                        try:
-                            order_id = self.take_profit_order.get("orderID")
-                            order_status = self.client.get_order(order_id)
-                            if order_status:
-                                filled = (
-                                    order_status.get("filled_size", 0) or
-                                    order_status.get("size_filled", 0) or
-                                    order_status.get("fills", 0) or
-                                    0
-                                )
-                                if filled > 0:
-                                    # 止盈订单成交了，使用实际成交价格
-                                    actual_price = (
-                                        order_status.get("price") or
-                                        order_status.get("avg_price") or
-                                        order_status.get("filled_price") or
-                                        self.config.take_profit
-                                    )
-                                    # 确保转换为数值
-                                    if isinstance(actual_price, str):
-                                        try:
-                                            actual_price = float(actual_price)
-                                        except:
-                                            actual_price = self.config.take_profit
-                                    # 转换为小数格式
-                                    if isinstance(actual_price, (int, float)) and actual_price > 1:
-                                        actual_price = actual_price / 100.0
-                                    exit_price = actual_price
-                                    sell_success = True
-                        except:
-                            pass
+                    # 代币已不存在（可能已被其他方式卖出）
+                    sell_success = False
                     
                     if not sell_success:
                         # 无法确定代币去向，清除持仓但不计算盈亏
