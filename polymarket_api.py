@@ -750,8 +750,8 @@ class PolymarketClient:
             # 当订单簿不完整时，利用这个关系进行修正
             
             # 检查哪一方有完整订单簿（买卖双方都有）
-            yes_has_complete_book = yes_asks and len(yes_asks) > 0 and yes_bids and len(yes_bids) > 0
-            no_has_complete_book = no_asks and len(no_asks) > 0 and no_bids and len(no_bids) > 0
+            yes_has_complete_book = len(yes_asks) > 0 and len(yes_bids) > 0
+            no_has_complete_book = len(no_asks) > 0 and len(no_bids) > 0
             
             if debug:
                 print(f"[调试] 订单簿完整性: YES={yes_has_complete_book}, NO={no_has_complete_book}")
