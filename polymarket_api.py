@@ -964,7 +964,7 @@ class PolymarketClient:
             token_id: 代币 ID
             
         Returns:
-            代币余额（股数）
+            代币余额（股数）- 已从微单位转换
         """
         if not self.client:
             return 0.0
@@ -981,13 +981,20 @@ class PolymarketClient:
                 # 余额可能是字典格式 {token_id: balance} 或直接数值
                 balance = resp.get("balance", 0)
                 
+                token_balance = 0.0
                 if isinstance(balance, dict):
                     # 字典格式：{token_id: balance}
-                    token_balance = balance.get(token_id, 0)
-                    return float(token_balance)
+                    token_balance = float(balance.get(token_id, 0))
                 elif isinstance(balance, (int, float, str)):
                     # 直接返回数值
-                    return float(balance)
+                    token_balance = float(balance)
+                
+                # 代币余额以微单位返回，需要转换（与 USDC 余额相同）
+                # 1 股 = 10^6 微单位
+                if token_balance > 10000:
+                    token_balance = token_balance / 1000000
+                
+                return token_balance
                 
             print(f"[!] 无法获取代币余额: {token_id[:20]}...")
             
