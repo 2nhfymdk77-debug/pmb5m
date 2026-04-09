@@ -1123,8 +1123,7 @@ class PolymarketClient:
                                 if response and response.get("success") != False:
                                     break
                             else:
-                                # 卖出订单股数不足，直接返回错误
-                                print(f"[!] 卖出股数 {size} 小于最小值 {min_size}，无法调整（余额可能不足）")
+                                # 卖出订单股数不足，静默返回错误（依靠价格监控处理）
                                 return {
                                     "success": False,
                                     "errorMsg": f"Size ({size:.2f}) lower than minimum: {min_size}",

@@ -1090,7 +1090,7 @@ class TradingEngine:
             actual_size = MIN_SHARES
         
         try:
-            # FOK 订单
+            # FOK 订单（立即全部成交或取消）
             buy_price = min(current_price + 0.05, 0.99)
             
             order = self.client.create_order(
