@@ -573,16 +573,40 @@ class TradingEngine:
 
             # 6. 如果有持仓，监控止损止盈或到期
             if self.current_position:
-                elapsed = time.time() - cycle_start
-                remaining_time = max(0, cycle_duration - elapsed)
-                
-                if remaining_time > 0:
+                # 循环监控，直到卖出成功或周期结束
+                while self.current_position:
+                    elapsed = time.time() - cycle_start
+                    remaining_time = max(0, cycle_duration - elapsed)
+                    
+                    if remaining_time <= 0:
+                        # 周期结束，强制结算
+                        exit_reason = "TIMEOUT"
+                        self._continue_monitoring = False
+                        self.settle_position(exit_reason)
+                        break
+                    
+                    # 重置继续监控标志
+                    self._continue_monitoring = False
+                    
+                    # 如果没有止盈订单，重新设置
+                    if not self.take_profit_order:
+                        position_size = self.current_position.get("size", 0)
+                        if position_size > 0:
+                            self.place_take_profit_order(position_size)
+                    
+                    # 监控止损止盈
                     exit_reason = self.monitor_position(remaining_time)
-                else:
-                    exit_reason = "TIMEOUT"
-                
-                if exit_reason:
-                    self.settle_position(exit_reason)
+                    
+                    if exit_reason:
+                        self.settle_position(exit_reason)
+                        
+                        # 检查是否需要继续监控（价格不满足卖出条件时返回）
+                        if getattr(self, '_continue_monitoring', False):
+                            print("[监控] 继续监控...")
+                            continue
+                        else:
+                            # 卖出成功或无法卖出，退出循环
+                            break
             else:
                 # 没有持仓，等待周期结束
                 elapsed = time.time() - cycle_start
@@ -1915,10 +1939,10 @@ class TradingEngine:
                                     print(f"[平仓] 仍满足止损条件 ({int(current_price*100)}% <= {self.config.stop_loss}%)")
                                 else:
                                     print(f"[平仓] 价格已回升，不满足止损条件 ({int(current_price*100)}% > {self.config.stop_loss}%)")
-                                    # 价格回升，返回继续监控
-                                    if retry == 0:
-                                        print(f"[平仓] 返回继续监控...")
-                                        return
+                                    # 价格回升，返回继续监控（设置标志让外层继续监控）
+                                    print(f"[平仓] 返回继续监控...")
+                                    self._continue_monitoring = True
+                                    return
                             elif exit_reason == "TAKE_PROFIT":
                                 # 止盈条件：价格 >= 止盈价
                                 if current_price >= to_float_price(self.config.take_profit):
@@ -1926,17 +1950,18 @@ class TradingEngine:
                                     print(f"[平仓] 仍满足止盈条件 ({int(current_price*100)}% >= {self.config.take_profit}%)")
                                 else:
                                     print(f"[平仓] 价格已回落，不满足止盈条件 ({int(current_price*100)}% < {self.config.take_profit}%)")
-                                    # 价格回落，返回继续监控
-                                    if retry == 0:
-                                        print(f"[平仓] 返回继续监控...")
-                                        return
+                                    # 价格回落，返回继续监控（设置标志让外层继续监控）
+                                    print(f"[平仓] 返回继续监控...")
+                                    self._continue_monitoring = True
+                                    return
                             elif exit_reason == "TIMEOUT":
                                 # 超时：必须卖出
                                 should_sell = True
                             
                             if not should_sell:
-                                # 不满足卖出条件，跳出重试
-                                break
+                                # 不满足卖出条件，返回继续监控
+                                self._continue_monitoring = True
+                                return
                             
                             # 使用当前市场价格 - 2 确保成交
                             sell_price = max(1, int(current_price * 100) - 2)
@@ -2015,8 +2040,8 @@ class TradingEngine:
                             print(f"[平仓] 等待 2 秒后重试...")
                             time.sleep(2)
         
-        # 如果卖出失败，不计算盈亏
-        if not sell_success and exit_reason != "TIMEOUT":
+        # 如果卖出失败，不计算盈亏（包括 TIMEOUT）
+        if not sell_success:
             print(f"[警告] 卖出失败，本次交易不计入盈亏")
             # 尝试同步真实余额
             try:
@@ -2026,6 +2051,9 @@ class TradingEngine:
                     print(f"[同步] 余额已更新: ${self.balance:.2f}")
             except:
                 pass
+            # 清除持仓记录（卖出失败但周期结束）
+            if exit_reason == "TIMEOUT":
+                self.current_position = None
             return
 
         # 更新余额和记录（仅卖出成功时）
