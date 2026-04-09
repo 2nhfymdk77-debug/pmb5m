@@ -989,10 +989,10 @@ class PolymarketClient:
                     # 直接返回数值
                     token_balance = float(balance)
                 
-                # 代币余额以微单位返回，需要转换（与 USDC 余额相同）
+                # 代币余额总是以微单位返回，需要转换为股数
                 # 1 股 = 10^6 微单位
-                if token_balance > 10000:
-                    token_balance = token_balance / 1000000
+                # 注意：不同于 USDC 余额的阈值逻辑，代币余额总是需要转换
+                token_balance = token_balance / 1000000
                 
                 return token_balance
                 

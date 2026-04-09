@@ -553,6 +553,14 @@ class TradingEngine:
                         print(f"[安全检查] 更新持仓数量: {position_size} → {actual_balance}")
                         self.current_position["size"] = actual_balance
                         position_size = actual_balance
+                    
+                    # 检查余额是否足够卖出（最小 5 股）
+                    MIN_SELL_SHARES = 5
+                    if actual_balance > 0 and actual_balance < MIN_SELL_SHARES:
+                        print(f"[安全检查] 余额 {actual_balance:.4f} 股 < 最小卖出股数 {MIN_SELL_SHARES}")
+                        print(f"[安全检查] 跳过卖出，等待事件结算或累积更多代币")
+                        # 清除持仓记录，让程序继续运行
+                        self.current_position = None
                 
                 # 如果仍有持仓且代币余额 > 0，检查事件是否已结算
                 if self.current_position and token_id:
