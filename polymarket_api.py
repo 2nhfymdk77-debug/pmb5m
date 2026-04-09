@@ -571,6 +571,32 @@ class PolymarketClient:
             print(f"[!] get_market_by_id 失败: {e}")
             return None
 
+    def get_tradable_markets(self, limit: int = 100) -> Optional[List[Dict[str, Any]]]:
+        """获取可交易的市场列表
+        
+        Args:
+            limit: 返回的市场数量限制
+            
+        Returns:
+            市场列表，失败返回 None
+        """
+        try:
+            url = f"{self.GAMMA_API_BASE}/markets"
+            params = {
+                "limit": limit,
+                "active": "true"  # 只获取活跃市场
+            }
+            response = requests.get(url, params=params, timeout=15)
+            
+            if response.status_code == 200:
+                markets = response.json()
+                if isinstance(markets, list):
+                    return markets
+            return None
+        except Exception as e:
+            print(f"[!] get_tradable_markets 失败: {e}")
+            return None
+
     def get_token_ids(self, market_id: str) -> Dict[str, str]:
         """获取市场的代币 ID"""
         cached = self.token_ids_cache.get(market_id)
