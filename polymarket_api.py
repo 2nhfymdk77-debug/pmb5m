@@ -669,74 +669,98 @@ class PolymarketClient:
             yes_book = yes_resp.json()
             no_book = no_resp.json()
             
-            # 从订单簿获取最低卖价（asks）作为价格参考
-            # bids = 买单（别人愿意买的价格），按价格降序排列
-            # asks = 卖单（别人愿意卖的价格），按价格升序排列
-            # 如果要买入，应该参考最低卖价（asks[0]），这是能立即成交的价格
+            # 获取中间价（mid price）= (最高买价 + 最低卖价) / 2
+            # 这是更准确的市场价格表示
             
             yes_price = 0.5
             no_price = 0.5
             
-            # YES 价格：最低卖价
+            # YES 价格：中间价
             yes_asks = yes_book.get("asks", [])
-            if yes_asks and len(yes_asks) > 0:
-                # asks 按价格升序排列，第一个是最低卖价
-                best_ask = yes_asks[0]
-                if debug:
-                    print(f"[调试] YES best_ask = {best_ask}")
-                
-                price_str = best_ask.get("price", "0.5")
-                if debug:
-                    print(f"[调试] YES 原始价格字符串: '{price_str}' (type: {type(price_str)})")
-                
-                try:
-                    yes_price_raw = float(price_str)
-                    # 统一转换为 0-1 格式
-                    if yes_price_raw > 1:
-                        yes_price = yes_price_raw / 100.0
-                        if debug:
-                            print(f"[调试] YES 价格 > 1，转换: {yes_price_raw} -> {yes_price}")
-                    else:
-                        yes_price = yes_price_raw
-                        if debug:
-                            print(f"[调试] YES 价格 <= 1，无需转换: {yes_price}")
-                except (ValueError, TypeError) as e:
-                    if debug:
-                        print(f"[调试] YES 价格转换失败: {e}")
-                    yes_price = 0.5
-            
-            # NO 价格：最低卖价
-            no_asks = no_book.get("asks", [])
-            if no_asks and len(no_asks) > 0:
-                best_ask = no_asks[0]
-                if debug:
-                    print(f"[调试] NO best_ask = {best_ask}")
-                
-                price_str = best_ask.get("price", "0.5")
-                if debug:
-                    print(f"[调试] NO 原始价格字符串: '{price_str}' (type: {type(price_str)})")
-                
-                try:
-                    no_price_raw = float(price_str)
-                    # 统一转换为 0-1 格式
-                    if no_price_raw > 1:
-                        no_price = no_price_raw / 100.0
-                        if debug:
-                            print(f"[调试] NO 价格 > 1，转换: {no_price_raw} -> {no_price}")
-                    else:
-                        no_price = no_price_raw
-                        if debug:
-                            print(f"[调试] NO 价格 <= 1，无需转换: {no_price}")
-                except (ValueError, TypeError) as e:
-                    if debug:
-                        print(f"[调试] NO 价格转换失败: {e}")
-                    no_price = 0.5
+            yes_bids = yes_book.get("bids", [])
             
             if debug:
-                print(f"[调试] CLOB API 实时价格（最低卖价）:")
-                print(f"[调试] YES 最低卖价: {yes_price:.4f} ({int(yes_price*100)}%)")
-                print(f"[调试] NO 最低卖价: {no_price:.4f} ({int(no_price*100)}%)")
-                print(f"[调试] YES + NO = {yes_price + no_price:.4f}")
+                print(f"[调试] YES 订单簿: asks={len(yes_asks)}, bids={len(yes_bids)}")
+            
+            if yes_asks and len(yes_asks) > 0 and yes_bids and len(yes_bids) > 0:
+                # 有买卖双方：使用中间价
+                best_ask = float(yes_asks[0].get("price", "0.5"))
+                best_bid = float(yes_bids[0].get("price", "0.5"))
+                yes_price_raw = (best_ask + best_bid) / 2
+                if debug:
+                    print(f"[调试] YES 中间价: ({best_ask} + {best_bid}) / 2 = {yes_price_raw}")
+            elif yes_asks and len(yes_asks) > 0:
+                # 只有卖方：使用最低卖价
+                yes_price_raw = float(yes_asks[0].get("price", "0.5"))
+                if debug:
+                    print(f"[调试] YES 只有卖方，使用最低卖价: {yes_price_raw}")
+            elif yes_bids and len(yes_bids) > 0:
+                # 只有买方：使用最高买价
+                yes_price_raw = float(yes_bids[0].get("price", "0.5"))
+                if debug:
+                    print(f"[调试] YES 只有买方，使用最高买价: {yes_price_raw}")
+            else:
+                yes_price_raw = 0.5
+                if debug:
+                    print(f"[调试] YES 订单簿为空，使用默认价格: 0.5")
+            
+            # 统一转换为 0-1 格式
+            if yes_price_raw > 1:
+                yes_price = yes_price_raw / 100.0
+            else:
+                yes_price = yes_price_raw
+            
+            # NO 价格：中间价
+            no_asks = no_book.get("asks", [])
+            no_bids = no_book.get("bids", [])
+            
+            if debug:
+                print(f"[调试] NO 订单簿: asks={len(no_asks)}, bids={len(no_bids)}")
+            
+            if no_asks and len(no_asks) > 0 and no_bids and len(no_bids) > 0:
+                # 有买卖双方：使用中间价
+                best_ask = float(no_asks[0].get("price", "0.5"))
+                best_bid = float(no_bids[0].get("price", "0.5"))
+                no_price_raw = (best_ask + best_bid) / 2
+                if debug:
+                    print(f"[调试] NO 中间价: ({best_ask} + {best_bid}) / 2 = {no_price_raw}")
+            elif no_asks and len(no_asks) > 0:
+                # 只有卖方：使用最低卖价
+                no_price_raw = float(no_asks[0].get("price", "0.5"))
+                if debug:
+                    print(f"[调试] NO 只有卖方，使用最低卖价: {no_price_raw}")
+            elif no_bids and len(no_bids) > 0:
+                # 只有买方：使用最高买价
+                no_price_raw = float(no_bids[0].get("price", "0.5"))
+                if debug:
+                    print(f"[调试] NO 只有买方，使用最高买价: {no_price_raw}")
+            else:
+                no_price_raw = 0.5
+                if debug:
+                    print(f"[调试] NO 订单簿为空，使用默认价格: 0.5")
+            
+            # 统一转换为 0-1 格式
+            if no_price_raw > 1:
+                no_price = no_price_raw / 100.0
+            else:
+                no_price = no_price_raw
+            
+            if debug:
+                print(f"[调试] CLOB API 实时价格（中间价）:")
+                print(f"[调试] YES: {yes_price:.4f} ({int(yes_price*100)}%)")
+                print(f"[调试] NO: {no_price:.4f} ({int(no_price*100)}%)")
+                print(f"[调试] YES + NO = {yes_price + no_price:.4f} (正常应接近1.00)")
+                
+                # 额外显示订单簿详情
+                if yes_asks and len(yes_asks) > 0:
+                    print(f"[调试] YES 卖一价: {float(yes_asks[0].get('price', 0)):.4f}")
+                if yes_bids and len(yes_bids) > 0:
+                    print(f"[调试] YES 买一价: {float(yes_bids[0].get('price', 0)):.4f}")
+                if no_asks and len(no_asks) > 0:
+                    print(f"[调试] NO 卖一价: {float(no_asks[0].get('price', 0)):.4f}")
+                if no_bids and len(no_bids) > 0:
+                    print(f"[调试] NO 买一价: {float(no_bids[0].get('price', 0)):.4f}")
+            
             
             return {"YES": yes_price, "NO": no_price}
             
