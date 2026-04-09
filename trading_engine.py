@@ -1140,12 +1140,10 @@ class TradingEngine:
                 # 标记为已交易
                 self.has_traded_in_event = True
                 
-                # 设置止损止盈（使用实际成交股数）
-                self.stop_loss_order = None
-                self.take_profit_order = None
-                
-                stop_result = self.place_stop_loss_order(filled_size)
-                take_result = self.place_take_profit_order(filled_size)
+                # 止损止盈使用价格监控（不创建订单）
+                print(f"[止损止盈] 使用价格监控方式")
+                print(f"  止损价格: {self.config.stop_loss}%")
+                print(f"  止盈价格: {self.config.take_profit}%")
                 
                 self.waiting_for_entry = False
             else:
@@ -1436,35 +1434,6 @@ class TradingEngine:
             return filled_orders[0]
         
         return None
-    
-    def _place_stop_take_parallel(self, position_size: float) -> Tuple[Optional[str], Optional[str]]:
-        """
-        并行设置止损止盈订单（优化速度）
-        
-        Returns:
-            (stop_loss_order_id, take_profit_order_id)
-        """
-        stop_loss_result = None
-        take_profit_result = None
-        
-        # 使用线程池并行设置止损和止盈
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            # 提交止损和止盈任务
-            stop_future = executor.submit(self.place_stop_loss_order, position_size)
-            take_future = executor.submit(self.place_take_profit_order, position_size)
-            
-            # 等待结果
-            try:
-                stop_loss_result = stop_future.result(timeout=5)
-            except Exception as e:
-                self.logger.error(f"并行设置止损单失败: {e}")
-            
-            try:
-                take_profit_result = take_future.result(timeout=5)
-            except Exception as e:
-                self.logger.error(f"并行设置止盈单失败: {e}")
-        
-        return (stop_loss_result, take_profit_result)
 
     def wait_for_execution(self, position_size: float, max_wait: int = 300) -> bool:
         """
@@ -1574,26 +1543,18 @@ class TradingEngine:
                 print(f"  开仓价: {actual_entry_price} (实际成交价)")
                 print(f"  股数: {filled} (实际成交)")
 
-                # 【极速优化】并行执行：取消另一侧 + 设置止损止盈
-                print(f"\n[极速操作] 并行执行：取消另一侧 + 设置止损止盈...")
+                # 【极速优化】并行执行：取消另一侧订单
+                print(f"\n[极速操作] 取消另一侧订单...")
                 
-                # 准备止损止盈参数
-                self.stop_loss_order = None
-                self.take_profit_order = None
-                
-                # 使用线程池并行执行所有操作
-                with ThreadPoolExecutor(max_workers=3) as executor:
-                    # 任务1：取消另一侧订单
+                # 使用线程池执行取消操作
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    # 任务：取消另一侧订单
                     cancel_futures = []
                     for other_order_id, other_order_info in list(self.pending_orders.items()):
                         if other_order_id != order_id:
                             cancel_future = executor.submit(self._cancel_single_order, other_order_info)
                             cancel_futures.append((other_order_id, cancel_future))
                             break  # 只有一个另一侧订单
-                    
-                    # 任务2&3：并行设置止损止盈（使用实际成交股数）
-                    stop_future = executor.submit(self.place_stop_loss_order, filled)
-                    take_future = executor.submit(self.place_take_profit_order, filled)
                     
                     # 等待取消订单结果
                     for other_order_id, cancel_future in cancel_futures:
@@ -1603,27 +1564,11 @@ class TradingEngine:
                                 del self.pending_orders[other_order_id]
                         except Exception as e:
                             self.logger.error(f"取消订单失败: {e}")
-                    
-                    # 等待止损止盈结果
-                    try:
-                        stop_loss_result = stop_future.result(timeout=5)
-                        if stop_loss_result:
-                            print(f"[极速操作] ✓ 止损单设置成功: {stop_loss_result[:20]}...")
-                        else:
-                            print(f"[极速操作] ✗ 止损单设置失败！")
-                    except Exception as e:
-                        self.logger.error(f"止损单设置失败: {e}")
-                        stop_loss_result = None
-                    
-                    try:
-                        take_profit_result = take_future.result(timeout=5)
-                        if take_profit_result:
-                            print(f"[极速操作] ✓ 止盈单设置成功: {take_profit_result[:20]}...")
-                        else:
-                            print(f"[极速操作] ✗ 止盈单设置失败！")
-                    except Exception as e:
-                        self.logger.error(f"止盈单设置失败: {e}")
-                        take_profit_result = None
+                
+                # 止损止盈使用价格监控（不创建订单）
+                print(f"[止损止盈] 使用价格监控方式")
+                print(f"  止损价格: {self.config.stop_loss}%")
+                print(f"  止盈价格: {self.config.take_profit}%")
                 
                 # 清除已成交的订单
                 self.pending_orders.clear()
@@ -1816,15 +1761,6 @@ class TradingEngine:
         print(f"\n[监控] 周期结束")
         return "TIMEOUT"
 
-    def _cancel_single_order(self, order: Dict) -> None:
-        """取消单个订单"""
-        try:
-            order_id = order.get("orderID")
-            if order_id:
-                self.client.cancel_order(order_id)
-        except Exception:
-            pass
-
     def settle_position(self, exit_reason: str) -> None:
         """根据退出原因结算持仓"""
         if not self.current_position:
@@ -2012,11 +1948,18 @@ class TradingEngine:
                                     remaining_balance = self.client.get_token_balance(token_id)
                                     if remaining_balance > 0.001:  # 还有剩余股数
                                         print(f"[平仓] 剩余股数: {remaining_balance:.4f}股")
-                                        # 更新 position_size，下一次 retry 会检查是否足够卖出
-                                        position_size = remaining_balance
-                                        self.current_position["size"] = remaining_balance
-                                        # 不设置 sell_success = False，让 retry 循环自然结束
-                                # 卖出完成（或剩余股数将在下次 retry 检查）
+                                        # 检查剩余股数是否足够卖出
+                                        min_shares_for_remaining = 1.0 / (sell_price / 100.0)
+                                        if remaining_balance >= min_shares_for_remaining:
+                                            # 足够卖出，更新 position_size 继续重试
+                                            position_size = remaining_balance
+                                            self.current_position["size"] = remaining_balance
+                                            sell_success = False  # 重置标志，继续重试
+                                            continue
+                                        else:
+                                            # 剩余股数不足最小金额，等待事件结算
+                                            print(f"[平仓] 剩余股数不足最小金额，等待事件结算")
+                                # 卖出完成
                                 break
                             else:
                                 # 取消未成交的订单
@@ -2106,15 +2049,7 @@ class TradingEngine:
             except:
                 pass
             self.stop_loss_order = None
-
-        if self.take_profit_order:
-            try:
-                order_id = self.take_profit_order.get("orderID")
-                if order_id:
-                    self.client.cancel_order(order_id)
-            except:
-                pass
-            self.take_profit_order = None
+            # take_profit_order 已废弃（止损止盈统一使用价格监控）
 
     def close_position(
         self,
