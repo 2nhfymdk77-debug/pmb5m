@@ -566,57 +566,62 @@ class TradingEngine:
                             "SETTLED"
                         )
                     else:
-                        # 事件未结算，尝试卖出
+                        # 事件未结算，检查是否可以卖出
                         prices = self.client.get_market_prices(self.config.market_id)
                         if prices:
                             exit_price = prices.get(token, 0.5)
                             sell_price = max(1, int(exit_price * 100) - 2)
                             
-                            # 使用已更新的 position_size
-                            print(f"[安全检查] 强制卖出 {token} {position_size}股 @ {sell_price}%")
+                            # 检查订单金额是否足够（Polymarket 最小订单金额 ~$1）
+                            min_shares_needed = 1.0 / (sell_price / 100.0)
+                            if position_size < min_shares_needed:
+                                print(f"[安全检查] 股数不足最小金额（{position_size:.4f}股 < {min_shares_needed:.4f}股），跳过卖出，等待事件结算")
+                            else:
+                                # 使用已更新的 position_size
+                                print(f"[安全检查] 强制卖出 {token} {position_size}股 @ {sell_price}%")
                             
-                            try:
-                                sell_order = self.client.create_order(
-                                    token_id=token_id,
-                                    price=sell_price,
-                                    size=position_size,
-                                    side="SELL",
-                                    order_type="GTC",
-                                )
-                                
-                                if sell_order and sell_order.get("success") != False:
-                                    # 等待成交
-                                    order_id = sell_order.get("orderID") or sell_order.get("order_id", "")
-                                    start_wait = time.time()
-                                    while time.time() - start_wait < 5:
-                                        try:
-                                            order_status = self.client.get_order(order_id)
-                                            if order_status:
-                                                filled = order_status.get("filled_size", 0) or order_status.get("size_filled", 0) or 0
-                                                if filled > 0:
-                                                    actual_price = order_status.get("price") or order_status.get("avg_price") or sell_price / 100.0
-                                                    # 确保转换为数值
-                                                    if isinstance(actual_price, str):
-                                                        try:
-                                                            actual_price = float(actual_price)
-                                                        except:
-                                                            actual_price = sell_price / 100.0
-                                                    # 转换为小数格式
-                                                    if isinstance(actual_price, (int, float)) and actual_price > 1:
-                                                        actual_price = actual_price / 100.0
-                                                    self.close_position(
-                                                        self.current_position["type"],
-                                                        position_size,
-                                                        entry_price,
-                                                        actual_price,
-                                                        "FORCED_CLOSE"
-                                                    )
-                                                    break
-                                        except:
-                                            pass
-                                        time.sleep(0.5)
-                            except Exception as e:
-                                print(f"[安全检查] 强制卖出失败: {e}")
+                                try:
+                                    sell_order = self.client.create_order(
+                                        token_id=token_id,
+                                        price=sell_price,
+                                        size=position_size,
+                                        side="SELL",
+                                        order_type="GTC",
+                                    )
+                                    
+                                    if sell_order and sell_order.get("success") != False:
+                                        # 等待成交
+                                        order_id = sell_order.get("orderID") or sell_order.get("order_id", "")
+                                        start_wait = time.time()
+                                        while time.time() - start_wait < 5:
+                                            try:
+                                                order_status = self.client.get_order(order_id)
+                                                if order_status:
+                                                    filled = order_status.get("filled_size", 0) or order_status.get("size_filled", 0) or 0
+                                                    if filled > 0:
+                                                        actual_price = order_status.get("price") or order_status.get("avg_price") or sell_price / 100.0
+                                                        # 确保转换为数值
+                                                        if isinstance(actual_price, str):
+                                                            try:
+                                                                actual_price = float(actual_price)
+                                                            except:
+                                                                actual_price = sell_price / 100.0
+                                                        # 转换为小数格式
+                                                        if isinstance(actual_price, (int, float)) and actual_price > 1:
+                                                            actual_price = actual_price / 100.0
+                                                        self.close_position(
+                                                            self.current_position["type"],
+                                                            position_size,
+                                                            entry_price,
+                                                            actual_price,
+                                                            "FORCED_CLOSE"
+                                                        )
+                                                        break
+                                            except:
+                                                pass
+                                            time.sleep(0.5)
+                                except Exception as e:
+                                    print(f"[安全检查] 强制卖出失败: {e}")
             except Exception as e:
                 print(f"[错误] 安全检查失败: {e}")
 
@@ -1410,16 +1415,22 @@ class TradingEngine:
                 prices = self.client.get_market_prices(self.config.market_id)
                 if prices:
                     second_token_id = second_order_info.get("token_id")
+                    second_size = second_order_info.get("size", 1)
                     if second_token_id:
-                        # 创建卖出订单
-                        sell_order = self.client.create_order(
-                            token_id=second_token_id,
-                            price=99,  # 以接近100的价格卖出，相当于市价
-                            size=second_order_info.get("size", 1),
-                            side="SELL",
-                            order_type="GTC",
-                        )
-                        print(f"[警告] 已卖出第二个持仓: {second_token}")
+                        # 检查订单金额是否足够
+                        min_shares_needed = 1.0 / 0.99  # 以99%价格卖出，最小股数
+                        if second_size >= min_shares_needed:
+                            # 创建卖出订单
+                            sell_order = self.client.create_order(
+                                token_id=second_token_id,
+                                price=99,  # 以接近100的价格卖出，相当于市价
+                                size=second_size,
+                                side="SELL",
+                                order_type="GTC",
+                            )
+                            print(f"[警告] 已卖出第二个持仓: {second_token}")
+                        else:
+                            print(f"[警告] 第二个持仓股数不足最小金额，跳过卖出")
             except Exception as e:
                 print(f"[错误] 卖出第二个持仓失败: {e}")
             
@@ -1771,6 +1782,12 @@ class TradingEngine:
             position_size = actual_balance
         
         if actual_balance <= 0:
+            return None
+        
+        # 检查订单金额是否足够（Polymarket 最小订单金额 ~$1）
+        min_shares_needed = 1.0 / (take_profit_price / 100.0)
+        if position_size < min_shares_needed:
+            print(f"[止盈] 股数不足最小金额（{position_size:.4f}股 < {min_shares_needed:.4f}股），跳过挂止盈单")
             return None
         
         # GTD 订单：5 分钟后自动过期（+60秒安全缓冲）
