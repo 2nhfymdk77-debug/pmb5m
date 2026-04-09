@@ -816,7 +816,7 @@ class PolymarketClient:
         return result
 
     def get_balance(self) -> float:
-        """获取账户余额"""
+        """获取账户余额（USDC）"""
         if not self.client:
             return 0.0
 
@@ -840,6 +840,42 @@ class PolymarketClient:
         except Exception as e:
             print(f"[!] SDK 余额查询失败: {e}")
 
+        return 0.0
+    
+    def get_token_balance(self, token_id: str) -> float:
+        """获取代币余额（YES/NO 代币）
+        
+        Args:
+            token_id: 代币 ID
+            
+        Returns:
+            代币余额（股数）
+        """
+        if not self.client:
+            return 0.0
+
+        try:
+            # 查询条件代币余额
+            params = BalanceAllowanceParams(asset_type=AssetType.CONDITIONAL)
+            resp = self.client.get_balance_allowance(params)
+            
+            if resp and isinstance(resp, dict):
+                # 查找对应 token_id 的余额
+                balances = resp.get("balance", {})
+                
+                if isinstance(balances, dict):
+                    # 余额可能是字典格式 {token_id: balance}
+                    token_balance = balances.get(token_id, 0)
+                    return float(token_balance)
+                elif isinstance(balances, (int, float, str)):
+                    # 或者直接返回数值
+                    return float(balances)
+                
+            print(f"[!] 无法获取代币余额: {token_id[:20]}...")
+            
+        except Exception as e:
+            print(f"[!] 代币余额查询失败: {e}")
+        
         return 0.0
 
     # ==================== 订单方法 ====================

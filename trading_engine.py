@@ -1007,6 +1007,10 @@ class TradingEngine:
                 # 标记为已交易
                 self.has_traded_in_event = True
                 
+                # 等待代币余额更新（买入后需要等待系统确认）
+                print(f"[等待] 等待代币余额更新...")
+                time.sleep(2)  # 等待 2 秒让系统更新代币余额
+                
                 # 设置止损止盈
                 self.stop_loss_order = None
                 self.take_profit_order = None
@@ -1626,6 +1630,18 @@ class TradingEngine:
         print(f"  开仓价: {entry_price}")
         print(f"  止盈价: {take_profit_price} → ${take_profit_display:.2f}")
         print(f"  卖出股数: {position_size}")
+        
+        # 检查代币余额（等待最多 10 秒）
+        max_wait = 10
+        for i in range(max_wait):
+            token_balance = self.client.get_token_balance(token_id)
+            print(f"  代币余额: {token_balance} (需要: {position_size})")
+            
+            if token_balance >= position_size:
+                break
+            
+            print(f"[等待] 代币余额不足，等待 {i+1}/{max_wait} 秒...")
+            time.sleep(1)
         
         # GTD 订单：5 分钟后自动过期（+60秒安全缓冲）
         duration = self.config.trade_cycle_minutes * 60
