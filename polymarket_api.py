@@ -1046,6 +1046,18 @@ class PolymarketClient:
             else:
                 api_price = price
 
+            # 卖出订单：检查订单金额是否足够（Polymarket 最小订单金额 ~$1）
+            # 买入订单已在 trading_engine 中处理最小股数
+            if side.upper() == "SELL":
+                order_amount = api_price * size
+                if order_amount < 1.0:
+                    # 订单金额不足 $1，直接返回错误，避免不必要的 API 调用
+                    return {
+                        "success": False,
+                        "errorMsg": f"Order amount (${order_amount:.2f}) below minimum ($1.00)",
+                        "actual_size": size,
+                    }
+
             # 获取市场参数
             tick_size = self.get_tick_size(token_id)
             neg_risk = self.get_neg_risk(token_id)
