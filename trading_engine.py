@@ -997,6 +997,29 @@ class TradingEngine:
         
         self.pending_orders.clear()
         print(f"[取消] 完成: 成功 {success_count}, 失败 {fail_count}")
+    
+    def _cancel_single_order(self, order_info: Dict) -> bool:
+        """立即取消单个订单（用于成交后快速取消另一侧）"""
+        try:
+            order_id = order_info.get("orderID") or order_info.get("order_id")
+            if not order_id:
+                return False
+            
+            token = order_info.get("token", "Unknown")
+            print(f"[极速取消] {token} 订单: {order_id[:20]}...", end="", flush=True)
+            
+            result = self.client.cancel_order(order_id)
+            
+            if result and result.get("success") != False:
+                print(f" ✓ 成功")
+                return True
+            else:
+                error_msg = result.get("errorMsg", "Unknown") if result else "Empty response"
+                print(f" ✗ 失败: {error_msg}")
+                return False
+        except Exception as e:
+            print(f" ✗ 异常: {e}")
+            return False
 
     def wait_for_execution(self, position_size: float, max_wait: int = 300) -> bool:
         """
@@ -1074,35 +1097,39 @@ class TradingEngine:
                             print(f"  开仓价: {order_info['price']}")
                             print(f"  股数: {order_info['size']}")
 
-                            # 取消另一个订单
-                            print(f"\n[取消] 正在取消另一侧订单...")
-                            self._cancel_pending_orders()
-
-                            # 等待1秒后检查另一个订单是否也成交了（并发保护）
-                            time.sleep(1)
-                            
-                            # 检查是否两个订单都成交了
+                            # 【关键环节1】立即取消另一侧订单（不等待）
+                            print(f"\n[极速操作] 正在取消另一侧订单...")
                             for other_order_id, other_order_info in list(self.pending_orders.items()):
                                 if other_order_id != order_id:
-                                    try:
-                                        other_status = self.client.get_order(other_order_id)
-                                        if other_status:
-                                            other_filled = (
-                                                other_status.get("filled_size", 0) or
-                                                other_status.get("size_filled", 0) or
-                                                other_status.get("fills", 0) or
-                                                other_status.get("fill_amount", 0) or
-                                                0
-                                            )
-                                            if other_filled > 0:
-                                                # 两个订单都成交了！
-                                                print(f"[警告] ⚠️  检测到两个订单都成交了！")
-                                                print(f"[警告] 已成交: {token}，另一个: {other_order_info['token']}")
-                                                print(f"[警告] 这会导致同时持有YES和NO，请手动处理！")
-                                                self.logger.error(f"异常：YES和NO订单同时成交！")
-                                    except Exception:
-                                        pass
-
+                                    # 立即取消，不检查状态（避免延迟）
+                                    self._cancel_single_order(other_order_info)
+                                    # 从挂单列表中移除
+                                    if other_order_id in self.pending_orders:
+                                        del self.pending_orders[other_order_id]
+                                    break  # 只有一个另一侧订单
+                            
+                            # 【关键环节2】立即设置止损止盈（不等到监控阶段）
+                            print(f"\n[极速操作] 正在设置止损止盈订单...")
+                            self.stop_loss_order = None
+                            self.take_profit_order = None
+                            
+                            stop_loss_result = self.place_stop_loss_order(order_info['size'])
+                            take_profit_result = self.place_take_profit_order(order_info['size'])
+                            
+                            if stop_loss_result:
+                                print(f"[极速操作] ✓ 止损单设置成功: {stop_loss_result[:20]}...")
+                            else:
+                                print(f"[极速操作] ✗ 止损单设置失败！")
+                            
+                            if take_profit_result:
+                                print(f"[极速操作] ✓ 止盈单设置成功: {take_profit_result[:20]}...")
+                            else:
+                                print(f"[极速操作] ✗ 止盈单设置失败！")
+                            
+                            # 清除已成交的订单
+                            self.pending_orders.clear()
+                            
+                            print(f"\n[极速操作] ✓ 成交后处理完成，进入监控阶段")
                             return True
                 except Exception:
                     # 静默处理查询失败，不打印警告
@@ -1115,7 +1142,8 @@ class TradingEngine:
                 print(f"\r[等待] 等待订单成交... 剩余 {remaining} 秒", end="", flush=True)
                 last_status_log = elapsed
 
-            time.sleep(1)
+            # 【优化】检查间隔从1秒改为0.5秒，更快检测成交
+            time.sleep(0.5)
 
         # 超时未成交，但**不取消订单**，让订单继续挂着
         elapsed = int(time.time() - start_time)
