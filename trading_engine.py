@@ -754,20 +754,17 @@ class TradingEngine:
             print(f"[诊断] 步骤6: 获取事件结束时间...")
             end_timestamp = None
             
-            # 尝试多个可能的字段名
-            end_date_iso = market.get("end_date_iso") or market.get("endDateIso")
-            if end_date_iso:
+            # 优先尝试 endDate 字段（时间戳，毫秒）
+            end_date_raw = market.get("endDate")
+            if end_date_raw:
                 try:
-                    # 解析 ISO 格式时间
-                    from datetime import datetime
-                    if isinstance(end_date_iso, str):
-                        # 处理可能的时间格式
-                        end_timestamp = datetime.fromisoformat(end_date_iso.replace('Z', '+00:00')).timestamp()
-                        print(f"[*] 事件结束时间: {end_date_iso} (Unix: {end_timestamp})")
-                except Exception as e:
-                    print(f"[!] 解析结束时间失败: {e}")
+                    # endDate 通常是毫秒时间戳
+                    end_timestamp = float(end_date_raw) / 1000.0
+                    print(f"[*] 事件结束时间(endDate): {end_timestamp}")
+                except:
+                    pass
             
-            # 如果没有 end_date_iso，尝试其他字段
+            # 如果没有，尝试 end_timestamp 字段
             if not end_timestamp:
                 end_ts_raw = market.get("end_timestamp") or market.get("endTimestamp") or market.get("end_ts")
                 if end_ts_raw:
@@ -776,6 +773,21 @@ class TradingEngine:
                         print(f"[*] 事件结束时间戳: {end_timestamp}")
                     except:
                         pass
+            
+            # 如果还是没有，尝试 endDateIso（注意：可能只有日期没有时间）
+            if not end_timestamp:
+                end_date_iso = market.get("endDateIso") or market.get("end_date_iso")
+                if end_date_iso:
+                    try:
+                        # 检查是否包含时间部分（有冒号表示有时间）
+                        if ':' in str(end_date_iso):
+                            end_timestamp = datetime.fromisoformat(end_date_iso.replace('Z', '+00:00')).timestamp()
+                            print(f"[*] 事件结束时间(endDateIso): {end_date_iso} (Unix: {end_timestamp})")
+                        else:
+                            # 只有日期，不使用
+                            print(f"[!] endDateIso 只有日期没有时间: {end_date_iso}")
+                    except Exception as e:
+                        print(f"[!] 解析结束时间失败: {e}")
             
             # 如果还是没有，计算下一个5分钟边界
             if not end_timestamp:
