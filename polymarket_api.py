@@ -740,7 +740,7 @@ class PolymarketClient:
             expiration: GTD 订单过期时间戳
 
         Returns:
-            订单响应
+            订单响应（包含实际的size）
         """
         if not self.client:
             return {"success": False, "errorMsg": "Client not initialized"}
@@ -755,6 +755,10 @@ class PolymarketClient:
             # 获取市场参数
             tick_size = self.get_tick_size(token_id)
             neg_risk = self.get_neg_risk(token_id)
+
+            # 记录原始size
+            original_size = size
+            actual_size = size
 
             print(f"\n[下单] 参数:")
             print(f"  token_id: {token_id[:20]}...")
@@ -813,6 +817,7 @@ class PolymarketClient:
                         if match:
                             min_size = int(match.group(1))
                             print(f"[!] 股数 {size} 小于最小值 {min_size}，调整后重试...")
+                            actual_size = float(min_size)  # 更新实际size
                             
                             # 使用最小股数重新创建订单
                             args = OrderArgs(
@@ -843,6 +848,7 @@ class PolymarketClient:
                 
                 if success:
                     print(f"[OK] 订单创建成功: {order_id[:20]}...")
+                    print(f"[OK] 实际下单股数: {actual_size} (原始: {original_size})")
                 else:
                     print(f"[X] 订单失败: {response.get('errorMsg', 'Unknown')}")
                 
@@ -850,15 +856,16 @@ class PolymarketClient:
                     "success": success,
                     "orderID": order_id,
                     "errorMsg": response.get("errorMsg", ""),
+                    "actual_size": actual_size,  # 返回实际下单的size
                 }
             else:
-                return {"success": False, "errorMsg": "Empty response"}
+                return {"success": False, "errorMsg": "Empty response", "actual_size": actual_size}
 
         except Exception as e:
             print(f"[X] 创建订单失败: {e}")
             import traceback
             traceback.print_exc()
-            return {"success": False, "errorMsg": str(e)}
+            return {"success": False, "errorMsg": str(e), "actual_size": size}
 
     def cancel_order(self, order_id: str) -> Dict[str, Any]:
         """取消订单"""

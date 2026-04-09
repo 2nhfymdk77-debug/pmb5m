@@ -393,6 +393,31 @@ class TradingEngine:
         print("[周期] 新周期开始")
         print("=" * 60)
 
+        # 安全检查：清除之前的挂单（如果有）
+        if self.pending_orders:
+            print(f"[安全] 清除上周期残留的 {len(self.pending_orders)} 个挂单")
+            self._cancel_pending_orders()
+        
+        # 安全检查：如果还有持仓，先平仓（可能是上周期异常）
+        if self.current_position:
+            print(f"[安全] 检测到残留持仓: {self.current_position.get('token', 'Unknown')}")
+            # 获取当前价格平仓
+            try:
+                prices = self.client.get_market_prices(self.config.market_id)
+                if prices:
+                    token = self.current_position.get("token", "YES")
+                    exit_price = prices.get(token, 0.5)
+                    self.close_position(
+                        self.current_position["type"],
+                        self.current_position["size"],
+                        self.current_position["entry_price"],
+                        exit_price,
+                        "FORCED_CLOSE"  # 强制平仓
+                    )
+                    print(f"[安全] 已强制平仓残留持仓")
+            except Exception as e:
+                print(f"[错误] 强制平仓失败: {e}")
+
         self.cycle_start_time = datetime.now()
         cycle_duration = self.config.trade_cycle_minutes * 60  # 转换为秒
         cycle_start = time.time()
@@ -878,6 +903,9 @@ class TradingEngine:
             )
             print(f"[挂单] YES 订单完成: {yes_order}")
 
+            # 获取实际下单的股数（可能因为最小股数限制被调整）
+            yes_actual_size = yes_order.get("actual_size", actual_size)
+
             print(f"[挂单] 正在挂 NO 买单...")
             # 挂 NO 买单（做多 NO）- 使用 GTC 限价单
             no_order = self.client.create_order(
@@ -889,6 +917,9 @@ class TradingEngine:
             )
             print(f"[挂单] NO 订单完成: {no_order}")
 
+            # 获取实际下单的股数
+            no_actual_size = no_order.get("actual_size", actual_size)
+
             # 记录订单（注意：py-clob-client返回的字段名是orderID）
             yes_order_id = yes_order.get("orderID") or yes_order.get("order_id", "")
             no_order_id = no_order.get("orderID") or no_order.get("order_id", "")
@@ -899,13 +930,14 @@ class TradingEngine:
             if no_order.get("success") == False:
                 print(f"[X] NO 订单创建失败: {no_order.get('errorMsg', 'Unknown error')}")
             
+            # 使用实际下单的股数记录订单
             if yes_order_id:
                 self.pending_orders[yes_order_id] = {
                     "type": "LONG",
                     "token": "YES",
                     "token_id": self.yes_token_id,
                     "price": entry_price,
-                    "size": actual_size,  # 股数
+                    "size": yes_actual_size,  # 使用实际的股数
                 }
             if no_order_id:
                 self.pending_orders[no_order_id] = {
@@ -913,7 +945,7 @@ class TradingEngine:
                     "token": "NO",
                     "token_id": self.no_token_id,
                     "price": entry_price,
-                    "size": actual_size,  # 股数
+                    "size": no_actual_size,  # 使用实际的股数
                 }
 
             print(f"[挂单] [OK] 双向限价单已挂: YES @ ${entry_display:.2f} | NO @ ${entry_display:.2f}")
@@ -1002,6 +1034,31 @@ class TradingEngine:
 
                             # 取消另一个订单
                             self._cancel_pending_orders()
+
+                            # 等待1秒后检查另一个订单是否也成交了（并发保护）
+                            time.sleep(1)
+                            
+                            # 检查是否两个订单都成交了
+                            for other_order_id, other_order_info in list(self.pending_orders.items()):
+                                if other_order_id != order_id:
+                                    try:
+                                        other_status = self.client.get_order(other_order_id)
+                                        if other_status:
+                                            other_filled = (
+                                                other_status.get("filled_size", 0) or
+                                                other_status.get("size_filled", 0) or
+                                                other_status.get("fills", 0) or
+                                                other_status.get("fill_amount", 0) or
+                                                0
+                                            )
+                                            if other_filled > 0:
+                                                # 两个订单都成交了！
+                                                print(f"[警告] ⚠️  检测到两个订单都成交了！")
+                                                print(f"[警告] 已成交: {token}，另一个: {other_order_info['token']}")
+                                                print(f"[警告] 这会导致同时持有YES和NO，请手动处理！")
+                                                self.logger.error(f"异常：YES和NO订单同时成交！")
+                                    except Exception:
+                                        pass
 
                             return True
                 except Exception:
