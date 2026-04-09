@@ -2004,32 +2004,6 @@ class TradingEngine:
                 # 查询实际代币余额
                 actual_balance = self.client.get_token_balance(token_id)
                 
-                # Polymarket 最小卖出股数限制：5股
-                MIN_SELL_SHARES = 5
-                if actual_balance > 0 and actual_balance < MIN_SELL_SHARES:
-                    print(f"[警告] 股数 {actual_balance:.2f} < 最小卖出股数 {MIN_SELL_SHARES}")
-                    # 如果是 TIMEOUT，检查事件是否已结算
-                    if exit_reason == "TIMEOUT":
-                        event_result = self.get_event_result()
-                        if event_result:
-                            # 事件已结算，根据结果计算盈亏
-                            if event_result == token:
-                                exit_price = 1.0
-                                print(f"[清算] 事件已结算，结果 = {event_result}，持仓 {token} 获胜")
-                            else:
-                                exit_price = 0.0
-                                print(f"[清算] 事件已结算，结果 = {event_result}，持仓 {token} 失败")
-                            self.close_position(position["type"], actual_balance, entry_price, exit_price, "SETTLED")
-                        else:
-                            # 事件未结算，保留持仓等待下一周期
-                            print(f"[等待] 事件未结算，保留持仓等待结算")
-                            self.current_position["size"] = actual_balance
-                    else:
-                        # 止损/止盈触发但股数不足，等待事件结算
-                        print(f"[等待] 股数不足无法卖出，等待事件结算")
-                        self.current_position["size"] = actual_balance
-                    return
-                
                 # 先用实际余额更新 position_size
                 if actual_balance <= 0:
                     # 代币已不存在，可能是止盈订单成交或其他原因
@@ -2196,7 +2170,6 @@ class TradingEngine:
         
         # 如果卖出失败，不计算盈亏（包括 TIMEOUT）
         if not sell_success:
-            print(f"[警告] 卖出失败，本次交易不计入盈亏")
             # 尝试同步真实余额
             try:
                 real_balance = self.client.get_balance()
@@ -2205,20 +2178,37 @@ class TradingEngine:
             except:
                 pass
             
-            # TIMEOUT 时的特殊处理
-            if exit_reason == "TIMEOUT":
-                # 检查代币是否还有余额
-                if token_id:
-                    remaining_balance = self.client.get_token_balance(token_id)
-                    if remaining_balance <= 0:
-                        # 代币已不存在（可能被结算或卖出），清除持仓
-                        self.current_position = None
-                    else:
-                        # 代币还有余额，保留持仓让下一个周期处理
-                        # 更新持仓数量为实际余额
-                        self.current_position["size"] = remaining_balance
+            # 检查事件是否已结算
+            event_result = self.get_event_result()
+            if event_result:
+                # 事件已结算，根据结果计算盈亏
+                if event_result == token:
+                    exit_price = 1.0
+                    print(f"[清算] 事件已结算，结果 = {event_result}，持仓 {token} 获胜")
                 else:
-                    self.current_position = None
+                    exit_price = 0.0
+                    print(f"[清算] 事件已结算，结果 = {event_result}，持仓 {token} 失败")
+                
+                # 获取实际代币余额
+                if token_id:
+                    actual_balance = self.client.get_token_balance(token_id)
+                    if actual_balance > 0:
+                        self.close_position(position["type"], actual_balance, entry_price, exit_price, "SETTLED")
+                        return
+                
+                self.close_position(position["type"], position_size, entry_price, exit_price, "SETTLED")
+                return
+            
+            # 事件未结算，保留持仓
+            if token_id:
+                remaining_balance = self.client.get_token_balance(token_id)
+                if remaining_balance > 0:
+                    print(f"[等待] 卖出失败，事件未结算，保留持仓 {remaining_balance:.2f}股")
+                    self.current_position["size"] = remaining_balance
+                    return
+            
+            # 代币为0，清除持仓
+            self.current_position = None
             return
 
         # 更新余额和记录（仅卖出成功时）
