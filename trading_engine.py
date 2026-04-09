@@ -537,9 +537,8 @@ class TradingEngine:
             market_data = self.fetch_market_data()
             
             if not market_data:
-                print("[等待] 无法获取市场数据，等待下次周期...")
-                # 等待到下一个5分钟边界
-                self._wait_next_cycle()
+                print("[跳过] 无法获取市场数据，立即尝试新周期...")
+                # 立即返回，让主循环开始新周期
                 return
             
             # 【关键修复】使用事件的实际剩余时间
@@ -548,10 +547,10 @@ class TradingEngine:
             
             print(f"[*] 事件剩余时间: {cycle_duration} 秒 ({cycle_duration/60:.1f} 分钟)")
             
-            # 如果剩余时间少于30秒，跳过此周期
+            # 如果剩余时间少于30秒，跳过此周期，立即开始新周期
             if cycle_duration < 30:
-                print(f"[跳过] 事件即将结束（剩余{cycle_duration}秒），等待下一周期...")
-                self._wait_next_cycle()
+                print(f"[跳过] 事件即将结束（剩余{cycle_duration}秒），立即开始新周期...")
+                # 立即返回，让主循环获取新的市场
                 return
 
             # 2. 检查是否是同一事件
