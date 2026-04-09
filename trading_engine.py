@@ -1137,7 +1137,7 @@ class TradingEngine:
 
     def _monitor_price_for_entry(self, position_size: float, max_wait: int) -> bool:
         """
-        监控价格，等待达到目标价时买入（最低延时版）
+        监控价格，等待达到目标价时买入（最低延时版 + 调试）
 
         【优化策略】：
         - 统一使用最低延时检查（0.05秒 = 50毫秒）
@@ -1155,20 +1155,45 @@ class TradingEngine:
 
         entry_target = self.entry_target_price
         print(f"\n[监控] 开始监控价格，等待涨到 {int(entry_target * 100)}%...")
+        print(f"[监控] 目标价: {entry_target:.2f} (0-1格式)")
+        print(f"[监控] 市场 ID: {self.config.market_id}")
+        print(f"[监控] YES Token: {self.yes_token_id[:20] if self.yes_token_id else 'N/A'}...")
+        print(f"[监控] NO Token: {self.no_token_id[:20] if self.no_token_id else 'N/A'}...")
         print(f"[监控] 检查间隔: 0.05秒（最低延时）")
+
+        # 首次获取市场详情，确认监控的是正确的市场
+        try:
+            market_info = self.client.get_market_by_id(self.config.market_id)
+            if market_info:
+                print(f"[监控] 市场问题: {market_info.get('question', 'N/A')[:60]}")
+                print(f"[监控] 市场 slug: {market_info.get('slug', 'N/A')}")
+                print(f"[监控] 市场 endDate: {market_info.get('endDate', 'N/A')}")
+        except Exception as e:
+            print(f"[监控] 获取市场详情失败: {e}")
 
         start_time = time.time()
         last_log_time = 0
+        api_call_count = 0
 
         while time.time() - start_time < max_wait:
             try:
-                prices = self.client.get_market_prices(self.config.market_id)
+                api_call_count += 1
+                
+                # 每 10 次调用输出一次详细调试信息
+                debug_mode = (api_call_count % 10 == 0)
+                prices = self.client.get_market_prices(self.config.market_id, debug=debug_mode)
+                
                 if not prices:
+                    print(f"\n[警告] 价格数据为空，等待...")
                     time.sleep(0.05)
                     continue
 
                 yes_price = prices.get("YES", 0.5)
                 no_price = prices.get("NO", 0.5)
+                
+                if debug_mode:
+                    print(f"[调试] YES >= 目标: {yes_price >= entry_target} ({yes_price:.4f} >= {entry_target:.4f})")
+                    print(f"[调试] NO >= 目标: {no_price >= entry_target} ({no_price:.4f} >= {entry_target:.4f})")
 
                 # 每 1 秒输出一次价格（避免刷屏）
                 current_time = time.time()
@@ -1178,7 +1203,7 @@ class TradingEngine:
                     yes_dist = abs(yes_price - entry_target)
                     no_dist = abs(no_price - entry_target)
                     min_dist = min(yes_dist, no_dist)
-                    print(f"\r[监控] YES={int(yes_price*100)}% NO={int(no_price*100)}% | 距离{int(min_dist*100)}% | 剩余 {remaining}s    ", end="", flush=True)
+                    print(f"\r[监控] YES={int(yes_price*100)}% NO={int(no_price*100)}% | 距离{int(min_dist*100)}% | 剩余 {remaining}s | API#{api_call_count}    ", end="", flush=True)
                     last_log_time = current_time
 
                 # 检查是否达到目标价
@@ -1198,6 +1223,7 @@ class TradingEngine:
                         price = no_price
 
                     print(f"\n\n[触发] {token} 价格达到目标 {int(entry_target * 100)}%!")
+                    print(f"[触发] 实际价格: YES={yes_price:.2f}, NO={no_price:.2f}")
                     self._execute_market_buy(token, position_size, price)
                     return True
 
@@ -1206,6 +1232,8 @@ class TradingEngine:
 
             except Exception as e:
                 print(f"\n[错误] 监控价格失败: {e}")
+                import traceback
+                traceback.print_exc()
                 time.sleep(0.05)
 
         print(f"\n[监控] 超时未触发，跳过此周期")

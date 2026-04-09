@@ -625,19 +625,41 @@ class PolymarketClient:
         
         return token_ids
 
-    def get_market_prices(self, market_id: str) -> Optional[Dict[str, float]]:
-        """获取市场价格（不使用缓存，确保实时性）"""
+    def get_market_prices(self, market_id: str, debug: bool = False) -> Optional[Dict[str, float]]:
+        """获取市场价格（不使用缓存，确保实时性）
+        
+        Args:
+            market_id: 市场ID
+            debug: 是否输出调试信息
+        """
         try:
             # 直接调用 API，不使用缓存的市场详情
             url = f"{self.GAMMA_API_BASE}/markets/{market_id}"
+            
+            if debug:
+                print(f"[调试] 请求 URL: {url}")
+            
             response = requests.get(url, timeout=10)
             
+            if debug:
+                print(f"[调试] 响应状态码: {response.status_code}")
+            
             if response.status_code != 200:
+                if debug:
+                    print(f"[调试] 响应内容: {response.text[:200]}")
                 return None
             
             market = response.json()
+            
+            if debug:
+                print(f"[调试] 市场问题: {market.get('question', 'N/A')[:50]}")
+                print(f"[调试] 市场 slug: {market.get('slug', 'N/A')}")
 
             outcome_prices = market.get("outcomePrices", [])
+            
+            if debug:
+                print(f"[调试] 原始 outcomePrices: {outcome_prices} (类型: {type(outcome_prices).__name__})")
+            
             if isinstance(outcome_prices, str):
                 try:
                     outcome_prices = json.loads(outcome_prices)
@@ -645,13 +667,41 @@ class PolymarketClient:
                     outcome_prices = []
 
             if isinstance(outcome_prices, list) and len(outcome_prices) >= 2:
-                yes_price = float(outcome_prices[0]) / 100 if float(outcome_prices[0]) > 1 else float(outcome_prices[0])
-                no_price = float(outcome_prices[1]) / 100 if float(outcome_prices[1]) > 1 else float(outcome_prices[1])
+                raw_yes = outcome_prices[0]
+                raw_no = outcome_prices[1]
+                
+                if debug:
+                    print(f"[调试] 原始 YES 价格: {raw_yes}, 原始 NO 价格: {raw_no}")
+                
+                # 价格格式：可能是整数（美分）或小数（概率）
+                # Polymarket API 返回的价格格式：
+                # - 49 表示 49%（概率）
+                # - 0.49 也表示 49%（概率）
+                # 但实际上 API 返回的是美分单位（如 49.5 表示 49.5%）
+                
+                yes_price = float(raw_yes)
+                no_price = float(raw_no)
+                
+                # 如果价格 > 1，说明是美分单位，需要除以 100
+                if yes_price > 1:
+                    yes_price = yes_price / 100
+                if no_price > 1:
+                    no_price = no_price / 100
+                
+                if debug:
+                    print(f"[调试] 转换后 YES 价格: {yes_price:.4f} ({int(yes_price*100)}%)")
+                    print(f"[调试] 转换后 NO 价格: {no_price:.4f} ({int(no_price*100)}%)")
+                    print(f"[调试] YES + NO = {yes_price + no_price:.4f} (应该约等于 1.0)")
+                
                 return {"YES": yes_price, "NO": no_price}
 
+            if debug:
+                print(f"[调试] outcomePrices 格式错误或为空")
             return None
         except Exception as e:
             print(f"[!] 获取价格失败: {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
     # ==================== 余额方法 ====================
