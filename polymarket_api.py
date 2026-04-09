@@ -684,6 +684,9 @@ class PolymarketClient:
                 best_ask = yes_asks[0]
                 price_str = best_ask.get("price", "0.5")
                 yes_price = float(price_str)
+                # 统一转换为 0-1 格式
+                if yes_price > 1:
+                    yes_price = yes_price / 100.0
             
             # NO 价格：最低卖价
             no_asks = no_book.get("asks", [])
@@ -691,6 +694,9 @@ class PolymarketClient:
                 best_ask = no_asks[0]
                 price_str = best_ask.get("price", "0.5")
                 no_price = float(price_str)
+                # 统一转换为 0-1 格式
+                if no_price > 1:
+                    no_price = no_price / 100.0
             
             if debug:
                 print(f"[调试] CLOB API 实时价格（最低卖价）:")
