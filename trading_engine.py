@@ -575,7 +575,8 @@ class TradingEngine:
                             # 检查订单金额是否足够（Polymarket 最小订单金额 ~$1）
                             min_shares_needed = 1.0 / (sell_price / 100.0)
                             if position_size < min_shares_needed:
-                                print(f"[安全检查] 股数不足最小金额（{position_size:.4f}股 < {min_shares_needed:.4f}股），跳过卖出，等待事件结算")
+                                print(f"[安全检查] 股数不足最小金额（{position_size:.4f}股 < {min_shares_needed:.4f}股），清除持仓等待事件结算")
+                                self.current_position = None
                             else:
                                 # 使用已更新的 position_size
                                 print(f"[安全检查] 强制卖出 {token} {position_size}股 @ {sell_price}%")
