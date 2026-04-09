@@ -1084,6 +1084,11 @@ class TradingEngine:
         if actual_size * current_price < 1.0:
             actual_size = math.ceil(1.0 / current_price)
         
+        # Polymarket API 最小股数限制：5股
+        MIN_SHARES = 5
+        if actual_size < MIN_SHARES:
+            actual_size = MIN_SHARES
+        
         try:
             # FOK 订单
             buy_price = min(current_price + 0.05, 0.99)
@@ -1998,6 +2003,32 @@ class TradingEngine:
             if token_id:
                 # 查询实际代币余额
                 actual_balance = self.client.get_token_balance(token_id)
+                
+                # Polymarket 最小卖出股数限制：5股
+                MIN_SELL_SHARES = 5
+                if actual_balance > 0 and actual_balance < MIN_SELL_SHARES:
+                    print(f"[警告] 股数 {actual_balance:.2f} < 最小卖出股数 {MIN_SELL_SHARES}")
+                    # 如果是 TIMEOUT，检查事件是否已结算
+                    if exit_reason == "TIMEOUT":
+                        event_result = self.get_event_result()
+                        if event_result:
+                            # 事件已结算，根据结果计算盈亏
+                            if event_result == token:
+                                exit_price = 1.0
+                                print(f"[清算] 事件已结算，结果 = {event_result}，持仓 {token} 获胜")
+                            else:
+                                exit_price = 0.0
+                                print(f"[清算] 事件已结算，结果 = {event_result}，持仓 {token} 失败")
+                            self.close_position(position["type"], actual_balance, entry_price, exit_price, "SETTLED")
+                        else:
+                            # 事件未结算，保留持仓等待下一周期
+                            print(f"[等待] 事件未结算，保留持仓等待结算")
+                            self.current_position["size"] = actual_balance
+                    else:
+                        # 止损/止盈触发但股数不足，等待事件结算
+                        print(f"[等待] 股数不足无法卖出，等待事件结算")
+                        self.current_position["size"] = actual_balance
+                    return
                 
                 # 先用实际余额更新 position_size
                 if actual_balance <= 0:
