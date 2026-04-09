@@ -235,9 +235,12 @@ class TradingConfig:
         try:
             # 1. 先从 .env 文件加载环境变量
             env_vars = load_env_variables()
+            
+            print(f"[配置] 配置文件路径: {CONFIG_FILE}", flush=True)
 
             # 2. 加载配置文件
             if not CONFIG_FILE.exists():
+                print(f"[配置] 配置文件不存在，创建默认配置", flush=True)
                 # 创建一个包含所有默认值的字典
                 data = {}
                 for field in cls.__dataclass_fields__.values():
@@ -257,8 +260,10 @@ class TradingConfig:
                 # 从字典创建配置（此时已包含环境变量）
                 config = cls.from_dict(data)
                 config.save()
+                print(f"[配置] 已创建默认配置文件", flush=True)
                 return config
 
+            print(f"[配置] 加载现有配置文件", flush=True)
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 
@@ -269,7 +274,8 @@ class TradingConfig:
                 
                 # 4. 再从字典创建实例（此时已包含环境变量）
                 config = cls.from_dict(data)
-
+                
+                print(f"[配置] 配置加载完成: entry_price={config.entry_price}", flush=True)
                 return config
         except json.JSONDecodeError as e:
             raise ConfigValidationError(f"配置文件格式错误: {e}")
