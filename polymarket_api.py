@@ -669,33 +669,33 @@ class PolymarketClient:
             yes_book = yes_resp.json()
             no_book = no_resp.json()
             
-            # 从订单簿获取最佳买价（最高买价）作为价格参考
-            # bids = 买单（别人愿意买的价格）
-            # asks = 卖单（别人愿意卖的价格）
-            # 我们用最高买价作为当前价格
+            # 从订单簿获取最低卖价（asks）作为价格参考
+            # bids = 买单（别人愿意买的价格），按价格降序排列
+            # asks = 卖单（别人愿意卖的价格），按价格升序排列
+            # 如果要买入，应该参考最低卖价（asks[0]），这是能立即成交的价格
             
             yes_price = 0.5
             no_price = 0.5
             
-            # YES 价格：最高买价
-            yes_bids = yes_book.get("bids", [])
-            if yes_bids and len(yes_bids) > 0:
-                # bids 通常是按价格降序排列，第一个是最高买价
-                best_bid = yes_bids[0]
-                price_str = best_bid.get("price", "0.5")
+            # YES 价格：最低卖价
+            yes_asks = yes_book.get("asks", [])
+            if yes_asks and len(yes_asks) > 0:
+                # asks 按价格升序排列，第一个是最低卖价
+                best_ask = yes_asks[0]
+                price_str = best_ask.get("price", "0.5")
                 yes_price = float(price_str)
             
-            # NO 价格：最高买价
-            no_bids = no_book.get("bids", [])
-            if no_bids and len(no_bids) > 0:
-                best_bid = no_bids[0]
-                price_str = best_bid.get("price", "0.5")
+            # NO 价格：最低卖价
+            no_asks = no_book.get("asks", [])
+            if no_asks and len(no_asks) > 0:
+                best_ask = no_asks[0]
+                price_str = best_ask.get("price", "0.5")
                 no_price = float(price_str)
             
             if debug:
-                print(f"[调试] CLOB API 实时价格:")
-                print(f"[调试] YES 最高买价: {yes_price:.4f} ({int(yes_price*100)}%)")
-                print(f"[调试] NO 最高买价: {no_price:.4f} ({int(no_price*100)}%)")
+                print(f"[调试] CLOB API 实时价格（最低卖价）:")
+                print(f"[调试] YES 最低卖价: {yes_price:.4f} ({int(yes_price*100)}%)")
+                print(f"[调试] NO 最低卖价: {no_price:.4f} ({int(no_price*100)}%)")
                 print(f"[调试] YES + NO = {yes_price + no_price:.4f}")
             
             return {"YES": yes_price, "NO": no_price}
