@@ -159,6 +159,11 @@ class TradingEngine:
         
         # 第一次下单确认标志
         self.first_order_confirmed = False
+        
+        # 价格监控标志（等待价格涨到目标价）
+        self.waiting_for_entry: bool = False
+        self.entry_target_price: float = 0.0
+        self.entry_position_size: float = 0.0
 
         # 启动信息
         entry_display = config.entry_price / 100.0 if config.entry_price > 1 else config.entry_price
@@ -556,26 +561,28 @@ class TradingEngine:
                 position_size = self.calculate_position_size()
                 print(f"[挂单] 开仓金额: ${position_size:.2f}")
 
-                # 5. 【优化】立即挂双向限价单（不再等待确认）
-                print("[极速] 开始挂双向限价单...", flush=True)
+                # 5. 检查价格是否达到目标，或开始监控
+                print("[监控] 检查价格是否达到目标...", flush=True)
                 sys.stdout.flush()
                 self.place_dual_orders(position_size)
 
-                # 6. 【优化】立即等待成交（不再打印调试日志）
                 # 计算周期剩余时间
                 elapsed = time.time() - cycle_start
                 remaining_time = max(0, cycle_duration - elapsed)
                 
-                has_execution = self.wait_for_execution(position_size, max_wait=int(remaining_time))
-                
-                # 如果没有订单成交，检查是否还有挂单
+                # 6. 如果等待价格触发，进入监控阶段
+                if self.waiting_for_entry and not self.current_position:
+                    print(f"[监控] 进入价格监控阶段...")
+                    has_execution = self._monitor_price_for_entry(position_size, max_wait=int(remaining_time))
+                elif self.current_position:
+                    # 已经买入（价格已经达到目标）
+                    has_execution = True
+                else:
+                    has_execution = False
+
+                # 如果没有买入，跳过此周期
                 if not has_execution and not self.current_position:
-                    # 如果还有挂单，说明是周期结束但订单未成交
-                    if self.pending_orders:
-                        print("[周期] 周期结束，取消未成交的订单...")
-                        self._cancel_pending_orders()
-                    else:
-                        print("[周期] 订单创建失败，跳过此周期，等待下一周期...")
+                    print("[周期] 价格未触发，跳过此周期...")
                     
                     # 等待剩余时间（如果有）
                     elapsed = time.time() - cycle_start
@@ -963,141 +970,237 @@ class TradingEngine:
 
     def place_dual_orders(self, position_size: float) -> None:
         """
-        挂双向限价单（YES 和 NO 都是买入，价格相同）
+        等待价格触发买入（正确实现"等待价格涨到 75 再买入"）
 
         【策略逻辑】：
-        - 同时挂两个限价买单：BUY YES @ 75, BUY NO @ 75
-        - 订单挂在订单簿上等待
-        - 哪一边价格先涨到 75，哪一边就成交
-        - 检测到成交后，立即取消另一侧订单
+        - 不挂限价单，而是监控价格
+        - 当 YES 或 NO 价格涨到目标价（如 75）时
+        - 立即下市价单买入
+        - 设置止损止盈
 
-        【Polymarket 限价单机制】：
-        - 限价买单 @ 75：如果当前卖一价 > 75，订单挂在订单簿等待
-        - 当卖一价降到 75 时，订单成交
-        - 如果当前卖一价 <= 75，订单立即以卖一价成交
+        【为什么不能用限价单挂单】：
+        - 限价买单 @ 75 = 以不高于 75 的价格买入
+        - 如果当前价格 51 < 75，订单会立即以 51 成交
+        - 这不是"等待涨到 75"，而是"立即买入"
 
-        注意：这里没有做空操作，都是做多！
+        【正确方案】：
+        - 监控价格变化
+        - 当价格达到目标价时，下市价单（FOK/FAK）买入
         """
         entry_price = self.config.entry_price
         # 转换为 0-1 格式
         entry_price_float = entry_price / 100.0 if entry_price > 1 else entry_price
-        entry_display = entry_price_float
+        entry_display = int(entry_price_float * 100)  # 显示为整数百分比
 
-        # 获取当前市场价格（仅用于显示）
-        print(f"[挂单] 获取当前市场价格...")
+        # 获取当前市场价格
+        print(f"[监控] 获取当前市场价格...")
         try:
             prices = self.client.get_market_prices(self.config.market_id)
-            if prices:
-                yes_price = prices.get("YES", 0.5)
-                no_price = prices.get("NO", 0.5)
-                print(f"[挂单] 当前市场价格: YES=${yes_price:.2f}, NO=${no_price:.2f}")
-                print(f"[挂单] 挂单价格: ${entry_display:.2f}")
-                print(f"[挂单] 策略: 哪一边价格先涨到 ${entry_display:.2f} 就成交")
+            if not prices:
+                print("[错误] 无法获取市场价格")
+                return
+            
+            yes_price = prices.get("YES", 0.5)
+            no_price = prices.get("NO", 0.5)
+            print(f"[监控] 当前市场价格: YES=${yes_price:.2f} ({int(yes_price*100)}%), NO=${no_price:.2f} ({int(no_price*100)}%)")
+            print(f"[监控] 目标开仓价格: {entry_display}%")
+            print(f"[监控] 策略: 等待价格涨到 {entry_display}% 时买入")
+            
+            # 检查当前价格是否已经达到目标
+            yes_reached = yes_price >= entry_price_float
+            no_reached = no_price >= entry_price_float
+            
+            if yes_reached and no_reached:
+                # 两边都达到目标价，买价格更高的（趋势更强）
+                print(f"\n[触发] 两边价格都已达到目标!")
+                if yes_price > no_price:
+                    self._execute_market_buy("YES", position_size, yes_price)
+                else:
+                    self._execute_market_buy("NO", position_size, no_price)
+                return
+            elif yes_reached:
+                print(f"\n[触发] YES 已达到目标价 {entry_display}%")
+                self._execute_market_buy("YES", position_size, yes_price)
+                return
+            elif no_reached:
+                print(f"\n[触发] NO 已达到目标价 {entry_display}%")
+                self._execute_market_buy("NO", position_size, no_price)
+                return
+            else:
+                # 两边都未达到目标价，设置监控标志
+                print(f"\n[监控] 两边价格都未达到目标价 {entry_display}%")
+                print(f"[监控] 等待价格触发...")
+                self.waiting_for_entry = True
+                self.entry_target_price = entry_price_float
+                self.entry_position_size = position_size
+                return
+                
         except Exception as e:
-            print(f"[警告] 无法获取市场价格: {e}")
-
-        # 计算实际数量（股数）
-        # Polymarket 订单金额 = 价格 × 数量
-        # 最小订单金额 = $1
-        # 数量 = 开仓金额 / 价格，向上取整
-        import math
-        raw_size = position_size / entry_price_float
-        # 向上取整，确保是整数
-        actual_size = math.ceil(raw_size)
-        # 确保订单金额 >= $1
-        order_value = actual_size * entry_price_float
-        if order_value < 1.0:
-            actual_size = math.ceil(1.0 / entry_price_float)
-        
-        print(f"[挂单] 挂双向限价单 @ ${entry_display:.2f}")
-        print(f"[挂单] 开仓金额: ${position_size:.2f}，价格: ${entry_price_float:.2f}")
-        print(f"[挂单] 计算数量: {raw_size:.2f} → 实际数量: {actual_size} 股")
-        print(f"[挂单] 订单金额: ${actual_size * entry_price_float:.2f}")
-
-        # 真实API模式：实际挂单
-        if not self.yes_token_id or not self.no_token_id:
-            print("[错误] 未设置代币ID")
+            print(f"[错误] 获取市场价格失败: {e}")
             return
 
+    def _execute_market_buy(self, token: str, position_size: float, current_price: float) -> None:
+        """
+        执行市价买入（使用 FOK 订单确保立即成交）
+
+        Args:
+            token: 代币类型 ("YES" 或 "NO")
+            position_size: 开仓金额（美元）
+            current_price: 当前价格（0-1 格式）
+        """
+        import math
+        
+        print(f"\n[买入] 执行市价买入 {token}")
+        print(f"  当前价格: {current_price:.2f} ({int(current_price*100)}%)")
+        print(f"  开仓金额: ${position_size:.2f}")
+        
+        token_id = self.yes_token_id if token == "YES" else self.no_token_id
+        
+        # 计算股数（以当前价格计算）
+        raw_size = position_size / current_price
+        actual_size = math.ceil(raw_size)
+        
+        # 确保订单金额 >= $1
+        order_value = actual_size * current_price
+        if order_value < 1.0:
+            actual_size = math.ceil(1.0 / current_price)
+        
+        print(f"  计算股数: {raw_size:.2f} → {actual_size} 股")
+        print(f"  预计金额: ${actual_size * current_price:.2f}")
+        
         try:
-            print(f"[挂单] 正在获取 YES market options...")
-            # 获取市场的 tick_size 和 neg_risk（官方文档要求）
-            yes_options = self.client.get_market_options(self.yes_token_id)
-            print(f"[挂单] YES options: {yes_options}")
+            # 使用 FOK 订单（全部成交或取消，相当于市价单）
+            # 价格设为略高于当前价，确保能成交
+            buy_price = min(current_price + 0.05, 0.99)  # 高 5%，最高 0.99
             
-            print(f"[挂单] 正在获取 NO market options...")
-            no_options = self.client.get_market_options(self.no_token_id)
-            print(f"[挂单] NO options: {no_options}")
-
-            print(f"[挂单] 正在挂 YES 买单...")
-            print(f"[挂单] YES 代币ID: {self.yes_token_id[:20]}...")
-            print(f"[挂单] 下单参数: price={entry_price}(美分) → {entry_price_float}(0-1格式), size={actual_size}股")
-            # 挂 YES 买单（做多 YES）- 使用 GTC 限价单
-            yes_order = self.client.create_order(
-                token_id=self.yes_token_id,
-                price=entry_price,
-                size=float(actual_size),  # 使用计算的数量
+            print(f"  下单参数: price={buy_price:.2f}, size={actual_size}, type=FOK")
+            
+            order = self.client.create_order(
+                token_id=token_id,
+                price=int(buy_price * 100),  # 转换为美分
+                size=float(actual_size),
                 side="BUY",
-                order_type="GTC",  # Good Till Cancelled
+                order_type="FOK",  # Fill-Or-Kill，市价单类型
             )
-            print(f"[挂单] YES 订单完成: {yes_order}")
-
-            # 获取实际下单的股数（可能因为最小股数限制被调整）
-            yes_actual_size = yes_order.get("actual_size", actual_size)
-            print(f"[挂单] YES 实际下单股数: {yes_actual_size}")
-
-            print(f"[挂单] 正在挂 NO 买单...")
-            print(f"[挂单] NO 代币ID: {self.no_token_id[:20]}...")
-            print(f"[挂单] 下单参数: price={entry_price}(美分) → {entry_price_float}(0-1格式), size={actual_size}股")
-            # 挂 NO 买单（做多 NO）- 使用 GTC 限价单
-            no_order = self.client.create_order(
-                token_id=self.no_token_id,
-                price=entry_price,
-                size=float(actual_size),  # 使用计算的数量
-                side="BUY",
-                order_type="GTC",
-            )
-            print(f"[挂单] NO 订单完成: {no_order}")
-
-            # 获取实际下单的股数
-            no_actual_size = no_order.get("actual_size", actual_size)
-            print(f"[挂单] NO 实际下单股数: {no_actual_size}")
-
-            # 记录订单（注意：py-clob-client返回的字段名是orderID）
-            yes_order_id = yes_order.get("orderID") or yes_order.get("order_id", "")
-            no_order_id = no_order.get("orderID") or no_order.get("order_id", "")
             
-            # 检查订单状态
-            if yes_order.get("success") == False:
-                print(f"[X] YES 订单创建失败: {yes_order.get('errorMsg', 'Unknown error')}")
-            if no_order.get("success") == False:
-                print(f"[X] NO 订单创建失败: {no_order.get('errorMsg', 'Unknown error')}")
+            order_id = order.get("orderID") or order.get("order_id", "")
             
-            # 使用实际下单的股数记录订单
-            if yes_order_id:
-                self.pending_orders[yes_order_id] = {
+            if order_id and order.get("success") != False:
+                # 获取实际成交价格
+                actual_price = (
+                    order.get("price") or
+                    order.get("avg_price") or
+                    buy_price
+                )
+                if isinstance(actual_price, str):
+                    actual_price = float(actual_price)
+                if actual_price < 1:
+                    actual_price = actual_price * 100  # 转换为美分
+                
+                # 记录持仓
+                self.current_position = {
                     "type": "LONG",
-                    "token": "YES",
-                    "token_id": self.yes_token_id,
-                    "price": entry_price,
-                    "size": yes_actual_size,  # 使用实际的股数
+                    "token": token,
+                    "token_id": token_id,
+                    "entry_price": actual_price,  # 实际成交价格（美分单位）
+                    "size": actual_size,
+                    "timestamp": datetime.now(),
                 }
-            if no_order_id:
-                self.pending_orders[no_order_id] = {
-                    "type": "LONG",
-                    "token": "NO",
-                    "token_id": self.no_token_id,
-                    "price": entry_price,
-                    "size": no_actual_size,  # 使用实际的股数
-                }
-
-            print(f"[挂单] [OK] 双向限价单已挂: YES @ ${entry_display:.2f} | NO @ ${entry_display:.2f}")
-            print(f"[挂单] 订单ID: YES={yes_order_id[:20] if yes_order_id else 'N/A'}..., NO={no_order_id[:20] if no_order_id else 'N/A'}...")
-
+                
+                print(f"[买入] ✓ 买入成功!")
+                print(f"  实际成交价: {actual_price} (美分单位)")
+                print(f"  成交股数: {actual_size}")
+                print(f"  成交金额: ${actual_size * actual_price / 100:.2f}")
+                
+                # 设置止损止盈
+                print(f"\n[止损止盈] 设置止损止盈...")
+                self.stop_loss_order = None
+                self.take_profit_order = None
+                
+                stop_result = self.place_stop_loss_order(actual_size)
+                take_result = self.place_take_profit_order(actual_size)
+                
+                if stop_result:
+                    print(f"[止损止盈] ✓ 止损单设置成功: {stop_result[:20]}...")
+                if take_result:
+                    print(f"[止损止盈] ✓ 止盈单设置成功: {take_result[:20]}...")
+                    
+                self.waiting_for_entry = False
+            else:
+                error_msg = order.get("errorMsg", "Unknown error")
+                print(f"[买入] ✗ 买入失败: {error_msg}")
+                
         except Exception as e:
-            print(f"[挂单] [X] 挂单失败: {e}")
+            print(f"[买入] ✗ 买入失败: {e}")
             import traceback
             traceback.print_exc()
+
+    def _monitor_price_for_entry(self, position_size: float, max_wait: int) -> bool:
+        """
+        监控价格，等待达到目标价时买入
+
+        Args:
+            position_size: 开仓金额
+            max_wait: 最大等待时间（秒）
+
+        Returns:
+            True 如果成功买入，False 如果超时未触发
+        """
+        if not self.waiting_for_entry:
+            return False
+
+        print(f"\n[监控] 开始监控价格，等待涨到 {int(self.entry_target_price * 100)}%...")
+
+        start_time = time.time()
+        last_log_time = 0
+
+        while time.time() - start_time < max_wait:
+            try:
+                prices = self.client.get_market_prices(self.config.market_id)
+                if not prices:
+                    time.sleep(0.5)
+                    continue
+
+                yes_price = prices.get("YES", 0.5)
+                no_price = prices.get("NO", 0.5)
+
+                # 每 5 秒输出一次价格
+                current_time = time.time()
+                if current_time - last_log_time >= 5:
+                    elapsed = int(current_time - start_time)
+                    remaining = max_wait - elapsed
+                    print(f"\r[监控] YES={int(yes_price*100)}% NO={int(no_price*100)}% | 剩余 {remaining}s    ", end="", flush=True)
+                    last_log_time = current_time
+
+                # 检查是否达到目标价
+                yes_reached = yes_price >= self.entry_target_price
+                no_reached = no_price >= self.entry_target_price
+
+                if yes_reached or no_reached:
+                    # 优先买先达到的，如果都达到则买价格更高的
+                    if yes_reached and no_reached:
+                        token = "YES" if yes_price > no_price else "NO"
+                        price = max(yes_price, no_price)
+                    elif yes_reached:
+                        token = "YES"
+                        price = yes_price
+                    else:
+                        token = "NO"
+                        price = no_price
+
+                    print(f"\n\n[触发] {token} 价格达到目标 {int(self.entry_target_price * 100)}%!")
+                    self._execute_market_buy(token, position_size, price)
+                    return True
+
+                time.sleep(0.5)  # 每 0.5 秒检查一次
+
+            except Exception as e:
+                print(f"\n[错误] 监控价格失败: {e}")
+                time.sleep(1)
+
+        print(f"\n[监控] 超时未触发，跳过此周期")
+        self.waiting_for_entry = False
+        return False
 
     def _place_single_order(self, token: str, position_size: float, entry_price: float, entry_price_float: float, expected_price: float) -> None:
         """挂单个订单（避免双持仓风险）
