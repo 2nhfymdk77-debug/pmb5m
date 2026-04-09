@@ -881,10 +881,14 @@ class TradingEngine:
         entry_price_float = entry_price / 100.0 if entry_price > 1 else entry_price
         entry_display = int(entry_price_float * 100)  # 显示为整数百分比
 
+        print(f"[调试] config.entry_price = {entry_price}")
+        print(f"[调试] entry_price_float = {entry_price_float}")
+        print(f"[调试] entry_display = {entry_display}%")
+
         # 获取当前市场价格
         print(f"[监控] 获取当前市场价格...")
         try:
-            prices = self.client.get_market_prices(self.config.market_id)
+            prices = self.client.get_market_prices(self.config.market_id, debug=True)
             if not prices:
                 print("[错误] 无法获取市场价格")
                 return
@@ -1004,6 +1008,7 @@ class TradingEngine:
 
         entry_target = self.entry_target_price
         print(f"[监控] 等待价格涨到 {int(entry_target * 100)}%")
+        print(f"[调试] entry_target = {entry_target} (应为 0.75)")
 
         start_time = time.time()
         last_log_time = 0
@@ -1023,6 +1028,10 @@ class TradingEngine:
 
                 yes_price = prices.get("YES", 0.5)
                 no_price = prices.get("NO", 0.5)
+                
+                # 调试：输出原始价格值
+                if time.time() - start_time < 2:
+                    print(f"[调试] yes_price = {yes_price}, no_price = {no_price}")
 
                 # 每 1 秒输出一次价格
                 current_time = time.time()
@@ -1034,6 +1043,10 @@ class TradingEngine:
                 # 检查是否达到目标价
                 yes_reached = yes_price >= entry_target
                 no_reached = no_price >= entry_target
+                
+                # 调试：如果触发，输出详细信息
+                if yes_reached or no_reached:
+                    print(f"\n[调试] 触发条件: yes_reached={yes_reached} ({yes_price}>={entry_target}), no_reached={no_reached} ({no_price}>={entry_target})")
 
                 if yes_reached or no_reached:
                     if yes_reached and no_reached:
