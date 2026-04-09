@@ -905,25 +905,44 @@ class TradingEngine:
             yes_reached = yes_price >= entry_price_float
             no_reached = no_price >= entry_price_float
             
+            # 【重要】如果价格已经 >= 目标价，说明价格太高，不适合买入
+            # 只有当价格从低往上涨，达到目标价时才买入
             if yes_reached and no_reached:
-                # 两边都达到目标价，买价格更高的（趋势更强）
-                print(f"\n[触发] 两边价格都已达到目标!")
-                if yes_price > no_price:
-                    self._execute_market_buy("YES", position_size, yes_price)
-                else:
-                    self._execute_market_buy("NO", position_size, no_price)
+                # 两边价格都太高，跳过此周期
+                print(f"\n[跳过] 两边价格都已达到目标（YES={int(yes_price*100)}%, NO={int(no_price*100)}%）")
+                print(f"[跳过] 价格太高，不适合买入")
+                self.has_traded_in_event = True  # 标记为已处理，避免重复检查
                 return
             elif yes_reached:
-                print(f"\n[触发] YES 已达到目标价 {entry_display}%")
-                self._execute_market_buy("YES", position_size, yes_price)
+                # YES 价格已经太高，不适合买入
+                print(f"\n[跳过] YES 价格已达到目标（{int(yes_price*100)}%）")
+                print(f"[跳过] 价格太高，不适合买入")
+                # 继续监控 NO 价格
+                if no_price < entry_price_float:
+                    print(f"[监控] 继续监控 NO 价格...")
+                    self.waiting_for_entry = True
+                    self.entry_target_price = entry_price_float
+                    self.entry_position_size = position_size
+                else:
+                    self.has_traded_in_event = True
                 return
             elif no_reached:
-                print(f"\n[触发] NO 已达到目标价 {entry_display}%")
-                self._execute_market_buy("NO", position_size, no_price)
+                # NO 价格已经太高，不适合买入
+                print(f"\n[跳过] NO 价格已达到目标（{int(no_price*100)}%）")
+                print(f"[跳过] 价格太高，不适合买入")
+                # 继续监控 YES 价格
+                if yes_price < entry_price_float:
+                    print(f"[监控] 继续监控 YES 价格...")
+                    self.waiting_for_entry = True
+                    self.entry_target_price = entry_price_float
+                    self.entry_position_size = position_size
+                else:
+                    self.has_traded_in_event = True
                 return
             else:
                 # 两边都未达到目标价，设置监控标志
                 print(f"[等待] 价格未达目标 {entry_display}%")
+                print(f"[等待] 等待价格涨到 {entry_display}% 时买入")
                 self.waiting_for_entry = True
                 self.entry_target_price = entry_price_float
                 self.entry_position_size = position_size
