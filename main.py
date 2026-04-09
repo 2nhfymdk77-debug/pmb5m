@@ -241,6 +241,11 @@ def run_direct_mode(config: TradingConfig) -> None:
 
 def main():
     """主函数"""
+    # 强制输出立即显示
+    import sys
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+    
     parser = argparse.ArgumentParser(description="Polymarket自动交易系统 - 真实交易模式")
     parser.add_argument(
         "--direct",
@@ -252,9 +257,11 @@ def main():
 
     # 打印横幅
     print_banner()
+    sys.stdout.flush()
 
     # 加载配置
     config = TradingConfig.load()
+    sys.stdout.flush()
 
     # 选择运行模式
     if args.direct:
