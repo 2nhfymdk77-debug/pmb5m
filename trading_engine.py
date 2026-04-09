@@ -1058,7 +1058,8 @@ class TradingEngine:
                 current_time = time.time()
                 if current_time - last_log_time >= 1.0:
                     remaining = int(max_wait - (current_time - start_time))
-                    print(f"\r[监控] YES={int(yes_price*100)}% NO={int(no_price*100)}% | 剩余{remaining}s    ", end="", flush=True)
+                    # 使用换行输出，更容易看到价格变化
+                    print(f"[监控] YES={int(yes_price*100)}% NO={int(no_price*100)}% | 剩余{remaining}s")
                     last_log_time = current_time
 
                 # 检查是否达到目标价

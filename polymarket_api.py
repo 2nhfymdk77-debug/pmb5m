@@ -672,6 +672,11 @@ class PolymarketClient:
                 yes_book = yes_resp.json()
                 no_book = no_resp.json()
                 
+                # 输出原始订单簿数据样本（用于诊断）
+                if debug and retry == 0:
+                    print(f"[调试] YES 订单簿原始数据样本: {str(yes_book)[:200]}...")
+                    print(f"[调试] NO 订单簿原始数据样本: {str(no_book)[:200]}...")
+                
                 # 获取中间价
                 yes_price = 0.5
                 no_price = 0.5
@@ -680,8 +685,30 @@ class PolymarketClient:
                 yes_asks = yes_book.get("asks", [])
                 yes_bids = yes_book.get("bids", [])
                 
+                # 对订单簿排序：asks 按价格升序，bids 按价格降序
+                if yes_asks:
+                    yes_asks = sorted(yes_asks, key=lambda x: float(x.get("price", "999")))
+                if yes_bids:
+                    yes_bids = sorted(yes_bids, key=lambda x: float(x.get("price", "0")), reverse=True)
+                
+                # 检测价格格式：如果价格 > 1，说明是百分比格式（需要除以100）
+                price_format = "decimal"  # 默认是小数格式
+                if yes_asks and float(yes_asks[0].get("price", "0")) > 1:
+                    price_format = "percent"
+                    if debug and retry == 0:
+                        print(f"[调试] 检测到价格格式为百分比格式（价格 > 1）")
+                
                 if debug:
                     print(f"[调试] YES 订单簿: asks={len(yes_asks)}, bids={len(yes_bids)}")
+                    # 输出前3档订单簿详情
+                    if len(yes_asks) > 0:
+                        print(f"[调试] YES 卖单前3档:")
+                        for i, ask in enumerate(yes_asks[:3]):
+                            print(f"[调试]   {i+1}. price={ask.get('price')}, size={ask.get('size')}")
+                    if len(yes_bids) > 0:
+                        print(f"[调试] YES 买单前3档:")
+                        for i, bid in enumerate(yes_bids[:3]):
+                            print(f"[调试]   {i+1}. price={bid.get('price')}, size={bid.get('size')}")
                 
                 if yes_asks and len(yes_asks) > 0 and yes_bids and len(yes_bids) > 0:
                     best_ask = float(yes_asks[0].get("price", "0.5"))
@@ -711,8 +738,23 @@ class PolymarketClient:
                 no_asks = no_book.get("asks", [])
                 no_bids = no_book.get("bids", [])
                 
+                # 对订单簿排序：asks 按价格升序，bids 按价格降序
+                if no_asks:
+                    no_asks = sorted(no_asks, key=lambda x: float(x.get("price", "999")))
+                if no_bids:
+                    no_bids = sorted(no_bids, key=lambda x: float(x.get("price", "0")), reverse=True)
+                
                 if debug:
                     print(f"[调试] NO 订单簿: asks={len(no_asks)}, bids={len(no_bids)}")
+                    # 输出前3档订单簿详情
+                    if len(no_asks) > 0:
+                        print(f"[调试] NO 卖单前3档:")
+                        for i, ask in enumerate(no_asks[:3]):
+                            print(f"[调试]   {i+1}. price={ask.get('price')}, size={ask.get('size')}")
+                    if len(no_bids) > 0:
+                        print(f"[调试] NO 买单前3档:")
+                        for i, bid in enumerate(no_bids[:3]):
+                            print(f"[调试]   {i+1}. price={bid.get('price')}, size={bid.get('size')}")
                 
                 if no_asks and len(no_asks) > 0 and no_bids and len(no_bids) > 0:
                     best_ask = float(no_asks[0].get("price", "0.5"))
