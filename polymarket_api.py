@@ -970,21 +970,24 @@ class PolymarketClient:
             return 0.0
 
         try:
-            # 查询条件代币余额
-            params = BalanceAllowanceParams(asset_type=AssetType.CONDITIONAL)
+            # 查询特定代币余额（传入 token_id）
+            params = BalanceAllowanceParams(
+                asset_type=AssetType.CONDITIONAL,
+                token_id=token_id
+            )
             resp = self.client.get_balance_allowance(params)
             
             if resp and isinstance(resp, dict):
-                # 查找对应 token_id 的余额
-                balances = resp.get("balance", {})
+                # 余额可能是字典格式 {token_id: balance} 或直接数值
+                balance = resp.get("balance", 0)
                 
-                if isinstance(balances, dict):
-                    # 余额可能是字典格式 {token_id: balance}
-                    token_balance = balances.get(token_id, 0)
+                if isinstance(balance, dict):
+                    # 字典格式：{token_id: balance}
+                    token_balance = balance.get(token_id, 0)
                     return float(token_balance)
-                elif isinstance(balances, (int, float, str)):
-                    # 或者直接返回数值
-                    return float(balances)
+                elif isinstance(balance, (int, float, str)):
+                    # 直接返回数值
+                    return float(balance)
                 
             print(f"[!] 无法获取代币余额: {token_id[:20]}...")
             
