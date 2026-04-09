@@ -1150,8 +1150,8 @@ class TradingEngine:
             loop_count += 1
             current_time = time.time()
             
-            # 【优化】价格显示频率降低：每3次循环更新一次（约0.9秒）
-            if loop_count % 3 == 0:
+            # 【优化】价格显示频率降低：每5次循环更新一次（约1秒）
+            if loop_count % 5 == 0:
                 try:
                     prices = self.client.get_market_prices(self.config.market_id)
                     if prices:
@@ -1241,8 +1241,8 @@ class TradingEngine:
                 print(f"\r[等待] 等待订单成交... 剩余 {remaining} 秒", end="", flush=True)
                 last_status_log = elapsed
 
-            # 【优化】检查间隔从0.5秒改为0.3秒
-            time.sleep(0.3)
+            # 【优化】检查间隔从0.3秒改为0.2秒（检测更快）
+            time.sleep(0.2)
 
         # 超时未成交，但**不取消订单**，让订单继续挂着
         elapsed = int(time.time() - start_time)
