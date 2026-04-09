@@ -637,7 +637,7 @@ class PolymarketClient:
         return token_ids
 
     def get_market_prices(self, market_id: str, debug: bool = False, yes_token_id: str = None, no_token_id: str = None, max_retries: int = 3) -> Optional[Dict[str, float]]:
-        """获取市场价格（使用 CLOB API 获取实时价格）
+        """获取市场价格（使用 CLOB API 获取实时价格）- 优化版：并行获取订单簿
         
         Args:
             market_id: 市场ID
@@ -646,6 +646,8 @@ class PolymarketClient:
             no_token_id: NO 代币 ID（可选，用于直接查询）
             max_retries: 最大重试次数（默认3次）
         """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        
         last_error = None
         
         for retry in range(max_retries):
@@ -664,24 +666,38 @@ class PolymarketClient:
                 # 使用 CLOB API 获取实时价格（从订单簿）
                 clob_base = "https://clob.polymarket.com"
                 
-                # 获取 YES 代币的订单簿
                 yes_url = f"{clob_base}/book?token_id={yes_token_id}"
                 no_url = f"{clob_base}/book?token_id={no_token_id}"
                 
-                if debug and retry == 0:
-                    print(f"[调试] CLOB API - YES URL: {yes_url}")
+                # 【优化】并行获取 YES 和 NO 订单簿
+                def fetch_orderbook(url: str, name: str):
+                    try:
+                        resp = requests.get(url, timeout=5)
+                        if resp.status_code == 200:
+                            return (name, resp.json())
+                    except:
+                        pass
+                    return (name, None)
                 
-                # 获取订单簿（增加超时）
-                yes_resp = requests.get(yes_url, timeout=10)
-                no_resp = requests.get(no_url, timeout=10)
+                yes_book = None
+                no_book = None
                 
-                if yes_resp.status_code != 200 or no_resp.status_code != 200:
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    futures = {
+                        executor.submit(fetch_orderbook, yes_url, "YES"): "YES",
+                        executor.submit(fetch_orderbook, no_url, "NO"): "NO",
+                    }
+                    for future in as_completed(futures):
+                        name, result = future.result()
+                        if name == "YES":
+                            yes_book = result
+                        else:
+                            no_book = result
+                
+                if not yes_book or not no_book:
                     if debug:
-                        print(f"[调试] CLOB API 响应失败: YES={yes_resp.status_code}, NO={no_resp.status_code}")
+                        print(f"[调试] CLOB API 响应失败")
                     return None
-                
-                yes_book = yes_resp.json()
-                no_book = no_resp.json()
                 
                 # 输出原始订单簿数据样本（用于诊断）
                 if debug and retry == 0:

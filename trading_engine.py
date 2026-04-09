@@ -1155,7 +1155,7 @@ class TradingEngine:
             print(f"[买入] ✗ 失败: {e}")
 
     def _monitor_price_for_entry(self, position_size: float, max_wait: int) -> bool:
-        """监控价格，等待达到目标价时买入"""
+        """监控价格，等待达到目标价时买入 - 优化版：动态检查频率"""
         if not self.waiting_for_entry:
             return False
 
@@ -1175,7 +1175,7 @@ class TradingEngine:
                 )
                 
                 if not prices:
-                    time.sleep(0.05)
+                    time.sleep(0.1)
                     continue
 
                 yes_price = prices.get("YES", 0.5)
@@ -1214,10 +1214,21 @@ class TradingEngine:
                     self._execute_market_buy(token, position_size, price)
                     return True
                 
-                # 价格太高或未达目标，继续监控
-                # 不做任何操作，让循环继续
-
-                time.sleep(0.05)
+                # 【优化】动态检查频率：根据价格距离目标价调整
+                yes_dist = abs(yes_price - entry_target)
+                no_dist = abs(no_price - entry_target)
+                min_dist = min(yes_dist, no_dist)
+                
+                if min_dist < 0.02:  # 距离 < 2%
+                    sleep_time = 0.02  # 极速模式：50次/秒
+                elif min_dist < 0.05:  # 距离 < 5%
+                    sleep_time = 0.05  # 快速模式：20次/秒
+                elif min_dist < 0.10:  # 距离 < 10%
+                    sleep_time = 0.1   # 标准模式：10次/秒
+                else:  # 距离 >= 10%
+                    sleep_time = 0.2   # 节能模式：5次/秒
+                
+                time.sleep(sleep_time)
 
             except requests.exceptions.ConnectionError as e:
                 print(f"\n[网络] 连接错误，等待恢复: {e}")
@@ -1702,7 +1713,7 @@ class TradingEngine:
         return None
 
     def monitor_position(self, max_wait: float) -> Optional[str]:
-        """监控持仓：止损、止盈或到期"""
+        """监控持仓：止损、止盈或到期 - 优化版：动态检查频率"""
         if not self.current_position:
             return None
 
@@ -1716,6 +1727,8 @@ class TradingEngine:
 
         start_time = time.time()
         last_log_time = 0
+        last_event_check = 0  # 上次检查事件结果的时间
+        event_result_cache = None  # 事件结果缓存
 
         while time.time() - start_time < max_wait:
             current_time = time.time()
@@ -1724,7 +1737,7 @@ class TradingEngine:
                 # 获取当前价格
                 prices = self.client.get_market_prices(self.config.market_id)
                 if not prices:
-                    time.sleep(0.05)
+                    time.sleep(0.1)
                     continue
 
                 current_price = prices.get(token, 0.5)
@@ -1744,8 +1757,31 @@ class TradingEngine:
                     remaining = int(max_wait - (current_time - start_time))
                     print(f"\r[监控] {token}={int(current_price*100)}% | 剩余{remaining}s    ", end="", flush=True)
                     last_log_time = current_time
+                
+                # 【优化】每 5 秒检查一次事件结果（避免频繁查询）
+                if current_time - last_event_check >= 5.0:
+                    event_result = self.get_event_result()
+                    if event_result:
+                        # 事件已结算
+                        print(f"\n[结算] 事件已结算，结果 = {event_result}")
+                        return "EVENT_SETTLED"
+                    last_event_check = current_time
 
-                time.sleep(0.05)
+                # 【优化】动态检查频率：根据价格距离止损止盈的距离调整
+                dist_to_stop = current_price - stop_loss_price
+                dist_to_profit = take_profit_price - current_price
+                min_dist = min(dist_to_stop, dist_to_profit)
+                
+                if min_dist < 0.03:  # 距离 < 3%
+                    sleep_time = 0.02  # 极速模式：50次/秒
+                elif min_dist < 0.05:  # 距离 < 5%
+                    sleep_time = 0.05  # 快速模式：20次/秒
+                elif min_dist < 0.10:  # 距离 < 10%
+                    sleep_time = 0.1   # 标准模式：10次/秒
+                else:  # 距离 >= 10%
+                    sleep_time = 0.2   # 节能模式：5次/秒
+                
+                time.sleep(sleep_time)
 
             except requests.exceptions.ConnectionError as e:
                 print(f"\n[网络] 连接错误，等待恢复: {e}")
@@ -1763,7 +1799,7 @@ class TradingEngine:
         return "TIMEOUT"
 
     def settle_position(self, exit_reason: str) -> None:
-        """根据退出原因结算持仓"""
+        """根据退出原因结算持仓 - 优化版：添加事件结算处理"""
         if not self.current_position:
             return
 
@@ -1779,6 +1815,24 @@ class TradingEngine:
             return price
 
         entry_price = to_float_price(entry_price_raw)
+
+        # 【新增】处理事件结算的情况
+        if exit_reason == "EVENT_SETTLED":
+            event_result = self.get_event_result()
+            if event_result:
+                # 查询实际代币余额
+                actual_balance = self.client.get_token_balance(token_id) if token_id else 0
+                if event_result == token:
+                    exit_price = 1.0
+                    print(f"[清算] 事件已结算，结果 = {event_result}，持仓 {token} 获胜，平仓价 = 100%")
+                else:
+                    exit_price = 0.0
+                    print(f"[清算] 事件已结算，结果 = {event_result}，持仓 {token} 失败，平仓价 = 0%")
+                self.close_position(token, actual_balance, entry_price, exit_price, "SETTLED")
+            else:
+                print(f"[清算] 无法获取事件结果，清除持仓记录")
+                self.current_position = None
+            return
 
         # 查询实际代币余额（使用实际余额，不使用记录的持仓数量）
         if token_id:
