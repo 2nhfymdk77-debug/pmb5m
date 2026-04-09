@@ -625,79 +625,81 @@ class PolymarketClient:
         
         return token_ids
 
-    def get_market_prices(self, market_id: str, debug: bool = False) -> Optional[Dict[str, float]]:
-        """获取市场价格（不使用缓存，确保实时性）
+    def get_market_prices(self, market_id: str, debug: bool = False, yes_token_id: str = None, no_token_id: str = None) -> Optional[Dict[str, float]]:
+        """获取市场价格（使用 CLOB API 获取实时价格）
         
         Args:
             market_id: 市场ID
             debug: 是否输出调试信息
+            yes_token_id: YES 代币 ID（可选，用于直接查询）
+            no_token_id: NO 代币 ID（可选，用于直接查询）
         """
         try:
-            # 直接调用 API，不使用缓存的市场详情
-            url = f"{self.GAMMA_API_BASE}/markets/{market_id}"
+            # 如果没有提供 token_id，先获取
+            if not yes_token_id or not no_token_id:
+                token_ids = self.get_token_ids(market_id)
+                yes_token_id = token_ids.get("YES")
+                no_token_id = token_ids.get("NO")
             
-            if debug:
-                print(f"[调试] 请求 URL: {url}")
-            
-            response = requests.get(url, timeout=10)
-            
-            if debug:
-                print(f"[调试] 响应状态码: {response.status_code}")
-            
-            if response.status_code != 200:
+            if not yes_token_id or not no_token_id:
                 if debug:
-                    print(f"[调试] 响应内容: {response.text[:200]}")
+                    print(f"[调试] 无法获取 token_ids")
                 return None
             
-            market = response.json()
+            # 使用 CLOB API 获取实时价格（从订单簿）
+            # CLOB API 端点: https://clob.polymarket.com/book?token_id=xxx
+            clob_base = "https://clob.polymarket.com"
+            
+            # 获取 YES 代币的订单簿
+            yes_url = f"{clob_base}/book?token_id={yes_token_id}"
+            no_url = f"{clob_base}/book?token_id={no_token_id}"
             
             if debug:
-                print(f"[调试] 市场问题: {market.get('question', 'N/A')[:50]}")
-                print(f"[调试] 市场 slug: {market.get('slug', 'N/A')}")
-
-            outcome_prices = market.get("outcomePrices", [])
+                print(f"[调试] CLOB API - YES URL: {yes_url}")
             
-            if debug:
-                print(f"[调试] 原始 outcomePrices: {outcome_prices} (类型: {type(outcome_prices).__name__})")
+            # 获取 YES 订单簿
+            yes_resp = requests.get(yes_url, timeout=5)
+            no_resp = requests.get(no_url, timeout=5)
             
-            if isinstance(outcome_prices, str):
-                try:
-                    outcome_prices = json.loads(outcome_prices)
-                except:
-                    outcome_prices = []
-
-            if isinstance(outcome_prices, list) and len(outcome_prices) >= 2:
-                raw_yes = outcome_prices[0]
-                raw_no = outcome_prices[1]
-                
+            if yes_resp.status_code != 200 or no_resp.status_code != 200:
                 if debug:
-                    print(f"[调试] 原始 YES 价格: {raw_yes}, 原始 NO 价格: {raw_no}")
-                
-                # 价格格式：可能是整数（美分）或小数（概率）
-                # Polymarket API 返回的价格格式：
-                # - 49 表示 49%（概率）
-                # - 0.49 也表示 49%（概率）
-                # 但实际上 API 返回的是美分单位（如 49.5 表示 49.5%）
-                
-                yes_price = float(raw_yes)
-                no_price = float(raw_no)
-                
-                # 如果价格 > 1，说明是美分单位，需要除以 100
-                if yes_price > 1:
-                    yes_price = yes_price / 100
-                if no_price > 1:
-                    no_price = no_price / 100
-                
-                if debug:
-                    print(f"[调试] 转换后 YES 价格: {yes_price:.4f} ({int(yes_price*100)}%)")
-                    print(f"[调试] 转换后 NO 价格: {no_price:.4f} ({int(no_price*100)}%)")
-                    print(f"[调试] YES + NO = {yes_price + no_price:.4f} (应该约等于 1.0)")
-                
-                return {"YES": yes_price, "NO": no_price}
-
+                    print(f"[调试] CLOB API 响应失败: YES={yes_resp.status_code}, NO={no_resp.status_code}")
+                return None
+            
+            yes_book = yes_resp.json()
+            no_book = no_resp.json()
+            
+            # 从订单簿获取最佳买价（最高买价）作为价格参考
+            # bids = 买单（别人愿意买的价格）
+            # asks = 卖单（别人愿意卖的价格）
+            # 我们用最高买价作为当前价格
+            
+            yes_price = 0.5
+            no_price = 0.5
+            
+            # YES 价格：最高买价
+            yes_bids = yes_book.get("bids", [])
+            if yes_bids and len(yes_bids) > 0:
+                # bids 通常是按价格降序排列，第一个是最高买价
+                best_bid = yes_bids[0]
+                price_str = best_bid.get("price", "0.5")
+                yes_price = float(price_str)
+            
+            # NO 价格：最高买价
+            no_bids = no_book.get("bids", [])
+            if no_bids and len(no_bids) > 0:
+                best_bid = no_bids[0]
+                price_str = best_bid.get("price", "0.5")
+                no_price = float(price_str)
+            
             if debug:
-                print(f"[调试] outcomePrices 格式错误或为空")
-            return None
+                print(f"[调试] CLOB API 实时价格:")
+                print(f"[调试] YES 最高买价: {yes_price:.4f} ({int(yes_price*100)}%)")
+                print(f"[调试] NO 最高买价: {no_price:.4f} ({int(no_price*100)}%)")
+                print(f"[调试] YES + NO = {yes_price + no_price:.4f}")
+            
+            return {"YES": yes_price, "NO": no_price}
+            
         except Exception as e:
             print(f"[!] 获取价格失败: {e}")
             import traceback

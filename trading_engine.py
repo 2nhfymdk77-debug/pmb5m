@@ -1142,6 +1142,7 @@ class TradingEngine:
         【优化策略】：
         - 统一使用最低延时检查（0.05秒 = 50毫秒）
         - 追求极致实时性，不考虑API调用次数
+        - 使用 CLOB API 获取实时订单簿价格
 
         Args:
             position_size: 开仓金额
@@ -1160,16 +1161,7 @@ class TradingEngine:
         print(f"[监控] YES Token: {self.yes_token_id[:20] if self.yes_token_id else 'N/A'}...")
         print(f"[监控] NO Token: {self.no_token_id[:20] if self.no_token_id else 'N/A'}...")
         print(f"[监控] 检查间隔: 0.05秒（最低延时）")
-
-        # 首次获取市场详情，确认监控的是正确的市场
-        try:
-            market_info = self.client.get_market_by_id(self.config.market_id)
-            if market_info:
-                print(f"[监控] 市场问题: {market_info.get('question', 'N/A')[:60]}")
-                print(f"[监控] 市场 slug: {market_info.get('slug', 'N/A')}")
-                print(f"[监控] 市场 endDate: {market_info.get('endDate', 'N/A')}")
-        except Exception as e:
-            print(f"[监控] 获取市场详情失败: {e}")
+        print(f"[监控] 使用 CLOB API 获取实时订单簿价格")
 
         start_time = time.time()
         last_log_time = 0
@@ -1181,7 +1173,14 @@ class TradingEngine:
                 
                 # 每 10 次调用输出一次详细调试信息
                 debug_mode = (api_call_count % 10 == 0)
-                prices = self.client.get_market_prices(self.config.market_id, debug=debug_mode)
+                
+                # 使用 CLOB API 获取实时价格，传递 token_id 避免重复查询
+                prices = self.client.get_market_prices(
+                    self.config.market_id, 
+                    debug=debug_mode,
+                    yes_token_id=self.yes_token_id,
+                    no_token_id=self.no_token_id
+                )
                 
                 if not prices:
                     print(f"\n[警告] 价格数据为空，等待...")
