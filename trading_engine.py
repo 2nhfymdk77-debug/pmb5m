@@ -893,6 +893,7 @@ class TradingEngine:
             print(f"[挂单] NO options: {no_options}")
 
             print(f"[挂单] 正在挂 YES 买单...")
+            print(f"[挂单] YES 代币ID: {self.yes_token_id[:20]}...")
             # 挂 YES 买单（做多 YES）- 使用 GTC 限价单
             yes_order = self.client.create_order(
                 token_id=self.yes_token_id,
@@ -905,8 +906,10 @@ class TradingEngine:
 
             # 获取实际下单的股数（可能因为最小股数限制被调整）
             yes_actual_size = yes_order.get("actual_size", actual_size)
+            print(f"[挂单] YES 实际下单股数: {yes_actual_size}")
 
             print(f"[挂单] 正在挂 NO 买单...")
+            print(f"[挂单] NO 代币ID: {self.no_token_id[:20]}...")
             # 挂 NO 买单（做多 NO）- 使用 GTC 限价单
             no_order = self.client.create_order(
                 token_id=self.no_token_id,
@@ -919,6 +922,7 @@ class TradingEngine:
 
             # 获取实际下单的股数
             no_actual_size = no_order.get("actual_size", actual_size)
+            print(f"[挂单] NO 实际下单股数: {no_actual_size}")
 
             # 记录订单（注意：py-clob-client返回的字段名是orderID）
             yes_order_id = yes_order.get("orderID") or yes_order.get("order_id", "")
@@ -1018,7 +1022,12 @@ class TradingEngine:
                             order_info = self.pending_orders[order_id]
                             token = order_info["token"]
 
-                            print(f"\r[成交] [OK] {token} 订单已成交!                    ")
+                            print(f"\r\n[成交] ✓ 订单成交详情:")
+                            print(f"  订单ID: {order_id[:20]}...")
+                            print(f"  代币: {token}")
+                            print(f"  开仓价格: {order_info['price']} (美分单位)")
+                            print(f"  成交股数: {filled}")
+                            print(f"  记录股数: {order_info['size']}")
                             print()
 
                             # 设置当前持仓
@@ -1031,8 +1040,14 @@ class TradingEngine:
                                 "size": order_info["size"],
                                 "timestamp": datetime.now(),
                             }
+                            
+                            print(f"[成交] 持仓已记录:")
+                            print(f"  代币: {token}")
+                            print(f"  开仓价: {order_info['price']}")
+                            print(f"  股数: {order_info['size']}")
 
                             # 取消另一个订单
+                            print(f"\n[取消] 正在取消另一侧订单...")
                             self._cancel_pending_orders()
 
                             # 等待1秒后检查另一个订单是否也成交了（并发保护）
@@ -1161,9 +1176,17 @@ class TradingEngine:
         stop_loss_price = self.config.stop_loss
         stop_loss_display = stop_loss_price / 100.0 if stop_loss_price > 1 else stop_loss_price
         
+        print(f"\n[止损] 设置止损单:")
+        print(f"  代币: {token}")
+        print(f"  代币ID: {token_id[:20]}...")
+        print(f"  开仓价: {entry_price}")
+        print(f"  止损价: {stop_loss_price} → ${stop_loss_display:.2f}")
+        print(f"  卖出股数: {position_size}")
+        
         # GTD 订单：5 分钟后自动过期（+60秒安全缓冲）
         duration = self.config.trade_cycle_minutes * 60
         expiration = int(time.time()) + 60 + duration
+        print(f"  过期时间: {expiration} (当前时间 + {duration + 60}秒)")
         
         try:
             # 获取市场的 tick_size 和 neg_risk
@@ -1222,9 +1245,17 @@ class TradingEngine:
         take_profit_price = self.config.take_profit
         take_profit_display = take_profit_price / 100.0 if take_profit_price > 1 else take_profit_price
         
+        print(f"\n[止盈] 设置止盈单:")
+        print(f"  代币: {token}")
+        print(f"  代币ID: {token_id[:20]}...")
+        print(f"  开仓价: {entry_price}")
+        print(f"  止盈价: {take_profit_price} → ${take_profit_display:.2f}")
+        print(f"  卖出股数: {position_size}")
+        
         # GTD 订单：5 分钟后自动过期（+60秒安全缓冲）
         duration = self.config.trade_cycle_minutes * 60
         expiration = int(time.time()) + 60 + duration
+        print(f"  过期时间: {expiration} (当前时间 + {duration + 60}秒)")
         
         try:
             # 卖出持仓代币 @ 止盈价格
@@ -1291,7 +1322,16 @@ class TradingEngine:
         take_profit_price = self.config.take_profit
         take_profit_display = take_profit_price / 100.0 if take_profit_price > 1 else take_profit_price
 
-        print(f"[监控] 持仓: {token} @ ${entry_price:.2f} | 止损 ≤ ${stop_loss_display:.2f} | 止盈 ≥ ${take_profit_display:.2f}")
+        # 转换entry_price为0-1格式用于显示
+        entry_price_display = entry_price / 100.0 if entry_price > 1 else entry_price
+
+        print(f"[监控] 持仓详情:")
+        print(f"  代币: {token}")
+        print(f"  开仓价格: ${entry_price_display:.2f} (存储值: {entry_price})")
+        print(f"  持仓股数: {position_size}")
+        print(f"  止损价格: ${stop_loss_display:.2f} (存储值: {stop_loss_price})")
+        print(f"  止盈价格: ${take_profit_display:.2f} (存储值: {take_profit_price})")
+        print(f"  监控时长: {max_wait:.1f}秒")
 
         # 清除之前的止损止盈订单
         self.stop_loss_order = None
@@ -1299,8 +1339,19 @@ class TradingEngine:
 
         # 设置止损止盈订单（使用 GTD 确保自动过期）
         if token_id:
-            self.place_stop_loss_order(position_size)
-            self.place_take_profit_order(position_size)
+            print(f"\n[止损止盈] 开始设置止损止盈订单...")
+            stop_loss_result = self.place_stop_loss_order(position_size)
+            take_profit_result = self.place_take_profit_order(position_size)
+            
+            if stop_loss_result:
+                print(f"[止损止盈] ✓ 止损单设置成功: {stop_loss_result[:20]}...")
+            else:
+                print(f"[止损止盈] ✗ 止损单设置失败！")
+            
+            if take_profit_result:
+                print(f"[止损止盈] ✓ 止盈单设置成功: {take_profit_result[:20]}...")
+            else:
+                print(f"[止损止盈] ✗ 止盈单设置失败！")
 
         # 监控止损止盈订单或等待周期结束
         start_time = time.time()
