@@ -963,7 +963,7 @@ class TradingEngine:
 
     def place_dual_orders(self, position_size: float) -> None:
         """
-        挂双向限价单（YES 和 NO 都是买入，价格都是75）
+        挂双向限价单（YES 和 NO 都是买入，价格相同）
 
         根据 Polymarket 官方文档：
         - size 参数是股数，不是金额
@@ -974,12 +974,19 @@ class TradingEngine:
         - 订单金额 = 价格 × 数量
         - 如果价格 0.75，数量至少需要 2（金额 $1.5）
         
-        正确逻辑：
+        【重要】策略逻辑：
         - YES 和 NO 是两个不同的代币
-        - 同时挂两个买入单：BUY YES @ 75 和 BUY NO @ 75
-        - 等待订单成交，取消未成交的一侧
+        - YES价格 + NO价格 = 100（或接近100）
+        - 如果当前价格：YES=50, NO=50，挂单价格=75
+        - 那么两个订单都会成交（因为市价50 < 挂单75）
         
-        **所有订单都是限价单（GTC），不是市价单**
+        【修复】先检查市场价格，只在合适的价格挂单：
+        - 如果 YES价格 < 挂单价格，YES订单会成交
+        - 如果 NO价格 < 挂单价格，NO订单会成交
+        - 如果两个价格都 < 挂单价格，两个都会成交（问题！）
+        
+        解决方案：只挂价格 > 挂单价格的一侧
+        或者：调整挂单价格，确保只有一个订单会成交
 
         注意：这里没有做空操作，都是做多！
         """
@@ -987,6 +994,56 @@ class TradingEngine:
         # 转换为 0-1 格式
         entry_price_float = entry_price / 100.0 if entry_price > 1 else entry_price
         entry_display = entry_price_float
+
+        # 【关键检查】获取当前市场价格
+        print(f"[挂单] 获取当前市场价格...")
+        try:
+            prices = self.client.get_market_prices(self.config.market_id)
+            if not prices:
+                print("[错误] 无法获取市场价格")
+                return
+            
+            yes_price = prices.get("YES", 0.5)
+            no_price = prices.get("NO", 0.5)
+            
+            print(f"[挂单] 当前市场价格: YES=${yes_price:.2f}, NO=${no_price:.2f}")
+            print(f"[挂单] 挂单价格: ${entry_display:.2f}")
+            
+            # 【关键修复】检查两个订单是否都会成交
+            # 限价买单成交条件：市场价格 <= 挂单价格
+            yes_will_fill = yes_price <= entry_price_float
+            no_will_fill = no_price <= entry_price_float
+            
+            print(f"[挂单] 预判成交: YES={yes_will_fill}, NO={no_will_fill}")
+            
+            if yes_will_fill and no_will_fill:
+                # 【问题】两个订单都会成交！
+                print(f"\n[警告] 两个订单都会成交！YES=${yes_price:.2f}, NO=${no_price:.2f} <= 挂单${entry_display:.2f}")
+                print(f"[警告] 这将导致同时持有 YES 和 NO，违背策略设计！")
+                
+                # 【解决方案1】选择价格更优的一侧挂单
+                # 价格更低的一方更可能盈利
+                if yes_price < no_price:
+                    # YES 价格更低，只挂 YES
+                    print(f"[策略] 选择只挂 YES 单（价格更低）")
+                    self._place_single_order("YES", position_size, entry_price, entry_price_float)
+                else:
+                    # NO 价格更低或相等，只挂 NO
+                    print(f"[策略] 选择只挂 NO 单（价格更低或相等）")
+                    self._place_single_order("NO", position_size, entry_price, entry_price_float)
+                return
+            
+            # 【正常情况】只有一个订单会成交
+            if yes_will_fill:
+                print(f"[挂单] 只有 YES 会成交")
+            elif no_will_fill:
+                print(f"[挂单] 只有 NO 会成交")
+            else:
+                # 两个都不会立即成交，正常挂双单等待
+                print(f"[挂单] 两个订单都不会立即成交，正常挂双单等待")
+                
+        except Exception as e:
+            print(f"[警告] 无法检查市场价格，继续挂双单: {e}")
 
         # 计算实际数量（股数）
         # Polymarket 订单金额 = 价格 × 数量
@@ -1090,6 +1147,56 @@ class TradingEngine:
             print(f"[挂单] [X] 挂单失败: {e}")
             import traceback
             traceback.print_exc()
+    
+    def _place_single_order(self, token: str, position_size: float, entry_price: float, entry_price_float: float) -> None:
+        """挂单个订单（避免双持仓风险）
+        
+        Args:
+            token: 代币类型 ("YES" 或 "NO")
+            position_size: 开仓金额
+            entry_price: 挂单价格（美分）
+            entry_price_float: 挂单价格（0-1格式）
+        """
+        import math
+        
+        # 计算股数
+        raw_size = position_size / entry_price_float
+        actual_size = math.ceil(raw_size)
+        order_value = actual_size * entry_price_float
+        if order_value < 1.0:
+            actual_size = math.ceil(1.0 / entry_price_float)
+        
+        token_id = self.yes_token_id if token == "YES" else self.no_token_id
+        entry_display = entry_price_float
+        
+        print(f"[挂单] 只挂 {token} 单 @ ${entry_display:.2f}")
+        print(f"[挂单] 开仓金额: ${position_size:.2f}, 股数: {actual_size}")
+        
+        try:
+            order = self.client.create_order(
+                token_id=token_id,
+                price=entry_price,
+                size=float(actual_size),
+                side="BUY",
+                order_type="GTC",
+            )
+            
+            order_id = order.get("orderID") or order.get("order_id", "")
+            
+            if order_id:
+                self.pending_orders[order_id] = {
+                    "type": "LONG",
+                    "token": token,
+                    "token_id": token_id,
+                    "price": entry_price,
+                    "size": actual_size,
+                }
+                print(f"[挂单] [OK] {token} 限价单已挂: @ ${entry_display:.2f}, 订单ID: {order_id[:20]}...")
+            else:
+                print(f"[挂单] [X] {token} 订单创建失败")
+                
+        except Exception as e:
+            print(f"[挂单] [X] 挂单失败: {e}")
 
     def _cancel_pending_orders(self) -> None:
         """取消所有挂单"""
@@ -1319,29 +1426,52 @@ class TradingEngine:
                     order_status.get("fill_amount", 0) or
                     0
                 )
-
+                
+                # 【关键修复】获取实际成交价格
+                # 限价单可能以更优的价格成交，需要获取实际成交价格
+                actual_entry_price = (
+                    order_status.get("price") or
+                    order_status.get("avg_price") or
+                    order_status.get("filled_price") or
+                    order_status.get("execution_price") or
+                    order_status.get("avgFilledPrice") or
+                    order_info["price"]  # 兜底：使用挂单价格
+                )
+                
+                # 价格格式转换（确保是数字）
+                if isinstance(actual_entry_price, str):
+                    try:
+                        actual_entry_price = float(actual_entry_price)
+                    except:
+                        actual_entry_price = order_info["price"]
+                
+                # 如果返回的是 0-1 格式，转换为美分格式（统一存储格式）
+                if actual_entry_price < 1:
+                    actual_entry_price = actual_entry_price * 100
+                
                 print(f"\r\n[成交] ✓ 订单成交详情:")
                 print(f"  订单ID: {order_id[:20]}...")
                 print(f"  代币: {token}")
-                print(f"  开仓价格: {order_info['price']} (美分单位)")
+                print(f"  挂单价格: {order_info['price']} (美分单位)")
+                print(f"  实际成交价: {actual_entry_price} (美分单位)")
                 print(f"  成交股数: {filled}")
                 print(f"  记录股数: {order_info['size']}")
                 print()
 
-                # 设置当前持仓
+                # 设置当前持仓（使用实际成交价格）
                 token_id = order_info.get("token_id")
                 self.current_position = {
                     "type": "LONG",
                     "token": token,
                     "token_id": token_id,
-                    "entry_price": order_info["price"],
+                    "entry_price": actual_entry_price,  # 使用实际成交价格
                     "size": order_info["size"],
                     "timestamp": datetime.now(),
                 }
                 
                 print(f"[成交] 持仓已记录:")
                 print(f"  代币: {token}")
-                print(f"  开仓价: {order_info['price']}")
+                print(f"  开仓价: {actual_entry_price} (实际成交价)")
                 print(f"  股数: {order_info['size']}")
 
                 # 【极速优化】并行执行：取消另一侧 + 设置止损止盈
