@@ -539,37 +539,48 @@ class PolymarketClient:
             return None
 
     def get_market_by_id(self, market_id: str) -> Optional[Dict[str, Any]]:
-        """通过 ID 获取市场"""
+        """通过 ID 获取市场（带重试）"""
         cached = self.market_details_cache.get(market_id)
         if cached:
             return cached
 
-        try:
-            # 方式1: 直接通过市场ID查询
-            url = f"{self.GAMMA_API_BASE}/markets/{market_id}"
-            response = requests.get(url, timeout=10)
-            
-            if response.status_code == 200:
-                market = response.json()
-                self.market_details_cache.set(market_id, market)
-                return market
-
-            # 方式2: 通过 condition_id 查询
-            url = f"{self.GAMMA_API_BASE}/markets?condition_id={market_id}"
-            response = requests.get(url, timeout=10)
-            
-            if response.status_code == 200:
-                data = response.json()
-                if isinstance(data, list) and len(data) > 0:
-                    market = data[0]
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # 方式1: 直接通过市场ID查询
+                url = f"{self.GAMMA_API_BASE}/markets/{market_id}"
+                response = requests.get(url, timeout=15)
+                
+                if response.status_code == 200:
+                    market = response.json()
                     self.market_details_cache.set(market_id, market)
                     return market
 
-            return None
+                # 方式2: 通过 condition_id 查询
+                url = f"{self.GAMMA_API_BASE}/markets?condition_id={market_id}"
+                response = requests.get(url, timeout=15)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    if isinstance(data, list) and len(data) > 0:
+                        market = data[0]
+                        self.market_details_cache.set(market_id, market)
+                        return market
 
-        except Exception as e:
-            print(f"[!] get_market_by_id 失败: {e}")
-            return None
+                return None
+
+            except (ConnectionResetError, ConnectionError, requests.exceptions.ConnectionError) as e:
+                if attempt < max_retries - 1:
+                    print(f"[!] get_market_by_id 连接重置，等待重试 ({attempt+1}/{max_retries})...")
+                    time.sleep(2)
+                    continue
+                print(f"[!] get_market_by_id 失败: {e}")
+                return None
+            except Exception as e:
+                print(f"[!] get_market_by_id 失败: {e}")
+                return None
+        
+        return None
 
     def get_tradable_markets(self, limit: int = 100) -> Optional[List[Dict[str, Any]]]:
         """获取可交易的市场列表
@@ -832,7 +843,7 @@ class PolymarketClient:
                 
                 return {"YES": yes_price, "NO": no_price}
                 
-            except requests.exceptions.ConnectionError as e:
+            except (requests.exceptions.ConnectionError, ConnectionResetError, ConnectionError) as e:
                 last_error = e
                 if retry < max_retries - 1:
                     wait_time = (retry + 1) * 2
