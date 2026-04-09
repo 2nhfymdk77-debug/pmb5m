@@ -896,6 +896,7 @@ class TradingEngine:
 
             print(f"[挂单] 正在挂 YES 买单...")
             print(f"[挂单] YES 代币ID: {self.yes_token_id[:20]}...")
+            print(f"[挂单] 下单参数: price={entry_price}(美分) → {entry_price_float}(0-1格式), size={actual_size}股")
             # 挂 YES 买单（做多 YES）- 使用 GTC 限价单
             yes_order = self.client.create_order(
                 token_id=self.yes_token_id,
@@ -912,6 +913,7 @@ class TradingEngine:
 
             print(f"[挂单] 正在挂 NO 买单...")
             print(f"[挂单] NO 代币ID: {self.no_token_id[:20]}...")
+            print(f"[挂单] 下单参数: price={entry_price}(美分) → {entry_price_float}(0-1格式), size={actual_size}股")
             # 挂 NO 买单（做多 NO）- 使用 GTC 限价单
             no_order = self.client.create_order(
                 token_id=self.no_token_id,
@@ -964,13 +966,37 @@ class TradingEngine:
 
     def _cancel_pending_orders(self) -> None:
         """取消所有挂单"""
+        if not self.pending_orders:
+            print(f"[取消] 没有待取消的订单")
+            return
+            
+        print(f"[取消] 准备取消 {len(self.pending_orders)} 个挂单...")
+        success_count = 0
+        fail_count = 0
+        
         for order_id in list(self.pending_orders.keys()):
             try:
-                self.client.cancel_order(order_id)
-                self.logger.info(f"已取消订单: {order_id}")
+                token = self.pending_orders[order_id].get("token", "Unknown")
+                print(f"[取消] 正在取消 {token} 订单: {order_id[:20]}...", end="", flush=True)
+                
+                result = self.client.cancel_order(order_id)
+                
+                if result and result.get("success") != False:
+                    print(f" ✓ 成功")
+                    self.logger.info(f"已取消订单: {order_id}")
+                    success_count += 1
+                else:
+                    error_msg = result.get("errorMsg", "Unknown") if result else "Empty response"
+                    print(f" ✗ 失败: {error_msg}")
+                    self.logger.error(f"取消订单失败: {order_id}, 错误: {error_msg}")
+                    fail_count += 1
             except Exception as e:
-                self.logger.error(f"取消订单失败: {e}")
+                print(f" ✗ 异常: {e}")
+                self.logger.error(f"取消订单失败: {order_id}, 异常: {e}")
+                fail_count += 1
+        
         self.pending_orders.clear()
+        print(f"[取消] 完成: 成功 {success_count}, 失败 {fail_count}")
 
     def wait_for_execution(self, position_size: float, max_wait: int = 300) -> bool:
         """
