@@ -1137,7 +1137,13 @@ class TradingEngine:
 
     def _monitor_price_for_entry(self, position_size: float, max_wait: int) -> bool:
         """
-        监控价格，等待达到目标价时买入
+        监控价格，等待达到目标价时买入（优化版：智能频率调整 + 极速模式）
+
+        【优化策略】：
+        - 当价格远离目标价时：降低检查频率（1秒），减少 API 调用
+        - 当价格接近目标价时：提高检查频率（0.1秒），提高实时性
+        - 当价格非常接近时：进入极速模式（0.05秒），最低延迟
+        - 动态调整检查频率，平衡实时性和 API 调用
 
         Args:
             position_size: 开仓金额
@@ -1149,7 +1155,8 @@ class TradingEngine:
         if not self.waiting_for_entry:
             return False
 
-        print(f"\n[监控] 开始监控价格，等待涨到 {int(self.entry_target_price * 100)}%...")
+        entry_target = self.entry_target_price
+        print(f"\n[监控] 开始监控价格，等待涨到 {int(entry_target * 100)}%...")
 
         start_time = time.time()
         last_log_time = 0
@@ -1164,17 +1171,41 @@ class TradingEngine:
                 yes_price = prices.get("YES", 0.5)
                 no_price = prices.get("NO", 0.5)
 
-                # 每 5 秒输出一次价格
+                # 计算距离目标价的距离
+                yes_distance = abs(yes_price - entry_target)
+                no_distance = abs(no_price - entry_target)
+                min_distance = min(yes_distance, no_distance)
+
+                # 【动态调整检查频率】
+                # 距离 > 10%: 1秒检查一次（低频）- 省资源
+                # 距离 5-10%: 0.5秒检查一次（中频）- 平衡
+                # 距离 2-5%: 0.1秒检查一次（高频）- 提高实时性
+                # 距离 < 2%: 0.05秒检查一次（极速）- 最低延迟
+                if min_distance > 0.10:
+                    check_interval = 1.0
+                    freq_display = "低频"
+                elif min_distance > 0.05:
+                    check_interval = 0.5
+                    freq_display = "中频"
+                elif min_distance > 0.02:
+                    check_interval = 0.1
+                    freq_display = "高频"
+                else:
+                    check_interval = 0.05  # 极速模式：50毫秒
+                    freq_display = "极速"
+
+                # 每 2 秒输出一次价格（极速模式下每 0.5 秒输出）
+                log_interval = 0.5 if check_interval == 0.05 else 2
                 current_time = time.time()
-                if current_time - last_log_time >= 5:
+                if current_time - last_log_time >= log_interval:
                     elapsed = int(current_time - start_time)
                     remaining = max_wait - elapsed
-                    print(f"\r[监控] YES={int(yes_price*100)}% NO={int(no_price*100)}% | 剩余 {remaining}s    ", end="", flush=True)
+                    print(f"\r[监控] YES={int(yes_price*100)}% NO={int(no_price*100)}% | 距离{int(min_distance*100)}% | {freq_display}({check_interval}s) | 剩余 {remaining}s    ", end="", flush=True)
                     last_log_time = current_time
 
                 # 检查是否达到目标价
-                yes_reached = yes_price >= self.entry_target_price
-                no_reached = no_price >= self.entry_target_price
+                yes_reached = yes_price >= entry_target
+                no_reached = no_price >= entry_target
 
                 if yes_reached or no_reached:
                     # 优先买先达到的，如果都达到则买价格更高的
@@ -1188,15 +1219,16 @@ class TradingEngine:
                         token = "NO"
                         price = no_price
 
-                    print(f"\n\n[触发] {token} 价格达到目标 {int(self.entry_target_price * 100)}%!")
+                    print(f"\n\n[触发] {token} 价格达到目标 {int(entry_target * 100)}%!")
                     self._execute_market_buy(token, position_size, price)
                     return True
 
-                time.sleep(0.5)  # 每 0.5 秒检查一次
+                # 使用动态调整的检查间隔
+                time.sleep(check_interval)
 
             except Exception as e:
                 print(f"\n[错误] 监控价格失败: {e}")
-                time.sleep(1)
+                time.sleep(0.5)
 
         print(f"\n[监控] 超时未触发，跳过此周期")
         self.waiting_for_entry = False
