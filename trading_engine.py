@@ -22,7 +22,7 @@ import logging
 import math
 import sys
 from datetime import datetime
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, List, Any, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from config import TradingConfig, TradeRecord, TradeHistory, ConfigValidationError
 from polymarket_api import PolymarketClient, format_time_remaining, format_price
