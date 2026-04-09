@@ -1834,10 +1834,12 @@ class TradingEngine:
             if token_id:
                 # 查询实际代币余额
                 actual_balance = self.client.get_token_balance(token_id)
+                print(f"[平仓] 实际代币余额: {actual_balance:.4f}股")
                 
                 # 先用实际余额更新 position_size
                 if actual_balance <= 0:
                     # 代币已不存在（可能已被其他方式卖出）
+                    print(f"[平仓] 代币余额为0，无法卖出")
                     sell_success = False
                     
                     if not sell_success:
@@ -1845,6 +1847,7 @@ class TradingEngine:
                         self.current_position = None
                     return
                 elif actual_balance < position_size:
+                    print(f"[平仓] 余额不足，更新股数: {position_size:.4f} → {actual_balance:.4f}")
                     position_size = actual_balance
                     self.current_position["size"] = actual_balance
                 

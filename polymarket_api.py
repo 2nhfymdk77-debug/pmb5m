@@ -1050,8 +1050,10 @@ class PolymarketClient:
             # 买入订单已在 trading_engine 中处理最小股数
             if side.upper() == "SELL":
                 order_amount = api_price * size
+                print(f"[API] 卖出订单: size={size:.4f}股, price={api_price:.2f}, amount=${order_amount:.2f}")
                 if order_amount < 1.0:
                     # 订单金额不足 $1，直接返回错误，避免不必要的 API 调用
+                    print(f"[API] 订单金额不足 $1，拒绝订单")
                     return {
                         "success": False,
                         "errorMsg": f"Order amount (${order_amount:.2f}) below minimum ($1.00)",
