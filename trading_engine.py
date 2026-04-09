@@ -470,16 +470,28 @@ class TradingEngine:
                 print("[调试] 挂单完成", flush=True)
                 sys.stdout.flush()
 
-                # 9. 等待成交或周期结束（最多等待到周期结束）
+                # 9. 等待成交或周期结束
                 print("[调试] 开始等待成交...", flush=True)
                 sys.stdout.flush()
-                has_execution = self.wait_for_execution(position_size, max_wait=30)
+                
+                # 计算周期剩余时间
+                elapsed = time.time() - cycle_start
+                remaining_time = max(0, cycle_duration - elapsed)
+                
+                has_execution = self.wait_for_execution(position_size, max_wait=int(remaining_time))
                 print(f"[调试] 等待完成，has_execution={has_execution}", flush=True)
                 sys.stdout.flush()
                 
-                # 如果没有订单成交，提前结束此周期
+                # 如果没有订单成交，检查是否还有挂单
                 if not has_execution and not self.current_position:
-                    print("[周期] 订单创建失败，跳过此周期，等待下一周期...")
+                    # 如果还有挂单，说明是周期结束但订单未成交
+                    if self.pending_orders:
+                        print("[周期] 周期结束，取消未成交的订单...")
+                        self._cancel_pending_orders()
+                    else:
+                        print("[周期] 订单创建失败，跳过此周期，等待下一周期...")
+                    
+                    # 等待剩余时间（如果有）
                     elapsed = time.time() - cycle_start
                     remaining_time = max(0, cycle_duration - elapsed)
                     if remaining_time > 0:
@@ -922,7 +934,7 @@ class TradingEngine:
                 self.logger.error(f"取消订单失败: {e}")
         self.pending_orders.clear()
 
-    def wait_for_execution(self, position_size: float, max_wait: int = 30) -> bool:
+    def wait_for_execution(self, position_size: float, max_wait: int = 300) -> bool:
         """
         等待订单成交
         
@@ -930,17 +942,17 @@ class TradingEngine:
         
         Args:
             position_size: 仓位大小
-            max_wait: 最大等待时间（秒）
+            max_wait: 最大等待时间（秒），默认300秒（5分钟）
             
         Returns:
-            True 如果有订单成交，False 如果没有订单或超时
+            True 如果有订单成交，False 如果超时未成交
         """
         # 如果没有挂单，直接返回
         if not self.pending_orders:
             print("[等待] [X] 没有挂单可等待（订单创建可能失败）")
             return False
             
-        print(f"\r[等待] 等待订单成交... (最多 {max_wait} 秒)", end="", flush=True)
+        print(f"\r[等待] 等待订单成交... (周期剩余 {max_wait} 秒)", end="", flush=True)
 
         start_time = time.time()
         last_status_log = 0  # 上次输出状态的时间
@@ -1005,10 +1017,12 @@ class TradingEngine:
 
             time.sleep(1)
 
-        # 超时未成交，取消所有订单
-        print(f"\r[等待] ⏰ 等待超时 ({max_wait} 秒)，取消所有订单       ")
+        # 超时未成交，但**不取消订单**，让订单继续挂着
+        elapsed = int(time.time() - start_time)
+        print(f"\r[等待] ⏰ 等待时间结束 ({elapsed} 秒)，订单继续挂着直到周期结束       ")
         print()
-        self._cancel_pending_orders()
+        # 不取消订单，让它们继续挂着
+        # self._cancel_pending_orders()  # 注释掉取消订单的逻辑
         
         return False
 
