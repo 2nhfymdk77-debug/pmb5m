@@ -595,6 +595,13 @@ class TradingEngine:
                                                 filled = order_status.get("filled_size", 0) or order_status.get("size_filled", 0) or 0
                                                 if filled > 0:
                                                     actual_price = order_status.get("price") or order_status.get("avg_price") or sell_price / 100.0
+                                                    # 确保转换为数值
+                                                    if isinstance(actual_price, str):
+                                                        try:
+                                                            actual_price = float(actual_price)
+                                                        except:
+                                                            actual_price = sell_price / 100.0
+                                                    # 转换为小数格式
                                                     if isinstance(actual_price, (int, float)) and actual_price > 1:
                                                         actual_price = actual_price / 100.0
                                                     self.close_position(
@@ -1854,14 +1861,22 @@ class TradingEngine:
                             )
                             if filled > 0:
                                 print(f"\n[止盈] 订单已成交")
-                                self.take_profit_filled_price = (
+                                take_profit_price_raw = (
                                     order_status.get("price") or
                                     order_status.get("avg_price") or
                                     order_status.get("filled_price") or
                                     self.config.take_profit
                                 )
-                                if isinstance(self.take_profit_filled_price, (int, float)) and self.take_profit_filled_price > 1:
-                                    self.take_profit_filled_price = self.take_profit_filled_price / 100.0
+                                # 确保转换为数值
+                                if isinstance(take_profit_price_raw, str):
+                                    try:
+                                        take_profit_price_raw = float(take_profit_price_raw)
+                                    except:
+                                        take_profit_price_raw = self.config.take_profit
+                                # 转换为小数格式
+                                if isinstance(take_profit_price_raw, (int, float)) and take_profit_price_raw > 1:
+                                    take_profit_price_raw = take_profit_price_raw / 100.0
+                                self.take_profit_filled_price = take_profit_price_raw
                                 self.take_profit_order = None
                                 return "TAKE_PROFIT_FILLED"
                     except:
@@ -2013,6 +2028,13 @@ class TradingEngine:
                                         order_status.get("filled_price") or
                                         self.config.take_profit
                                     )
+                                    # 确保转换为数值
+                                    if isinstance(actual_price, str):
+                                        try:
+                                            actual_price = float(actual_price)
+                                        except:
+                                            actual_price = self.config.take_profit
+                                    # 转换为小数格式
                                     if isinstance(actual_price, (int, float)) and actual_price > 1:
                                         actual_price = actual_price / 100.0
                                     exit_price = actual_price
@@ -2097,6 +2119,13 @@ class TradingEngine:
                                                 order_status.get("filled_price") or
                                                 sell_price / 100.0
                                             )
+                                            # 确保转换为数值
+                                            if isinstance(actual_price, str):
+                                                try:
+                                                    actual_price = float(actual_price)
+                                                except:
+                                                    actual_price = sell_price / 100.0
+                                            # 转换为小数格式
                                             if isinstance(actual_price, (int, float)) and actual_price > 1:
                                                 actual_price = actual_price / 100.0
                                             # 计算成交金额
