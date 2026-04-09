@@ -1659,25 +1659,8 @@ class TradingEngine:
         print(f"  止盈价格: ${take_profit_display:.2f} (存储值: {take_profit_price})")
         print(f"  监控时长: {max_wait:.1f}秒")
 
-        # 清除之前的止损止盈订单
-        self.stop_loss_order = None
-        self.take_profit_order = None
-
-        # 设置止损止盈订单（使用 GTD 确保自动过期）
-        if token_id:
-            print(f"\n[止损止盈] 开始设置止损止盈订单...")
-            stop_loss_result = self.place_stop_loss_order(position_size)
-            take_profit_result = self.place_take_profit_order(position_size)
-            
-            if stop_loss_result:
-                print(f"[止损止盈] ✓ 止损单设置成功: {stop_loss_result[:20]}...")
-            else:
-                print(f"[止损止盈] ✗ 止损单设置失败！")
-            
-            if take_profit_result:
-                print(f"[止损止盈] ✓ 止盈单设置成功: {take_profit_result[:20]}...")
-            else:
-                print(f"[止损止盈] ✗ 止盈单设置失败！")
+        # 注意：止损止盈订单已在 wait_for_execution 中设置
+        # 这里不再重复设置，只监控订单状态和价格
 
         # 监控止损止盈订单或等待周期结束
         start_time = time.time()
@@ -1685,14 +1668,15 @@ class TradingEngine:
         last_check_time = start_time
 
         print(f"\n[监控] 开始监控止损止盈订单...")
+        print(f"[监控] 止损: {stop_loss_display:.2f} | 止盈: {take_profit_display:.2f}")
         
         while time.time() - start_time < max_wait:
             current_time = time.time()
             elapsed_since_last_check = current_time - last_check_time
             
-            # 每2秒检查一次订单状态（减少API调用）
+            # 每2秒检查一次订单状态和价格（减少API调用）
             if elapsed_since_last_check >= 2.0:
-                # 检查止损订单是否成交
+                # 1. 检查止损订单是否成交
                 if self.stop_loss_order:
                     try:
                         order_id = self.stop_loss_order.get("orderID")
@@ -1716,7 +1700,7 @@ class TradingEngine:
                     except Exception:
                         pass
 
-                # 检查止盈订单是否成交
+                # 2. 检查止盈订单是否成交
                 if self.take_profit_order:
                     try:
                         order_id = self.take_profit_order.get("orderID")
@@ -1739,6 +1723,45 @@ class TradingEngine:
                                 return "TAKE_PROFIT"
                     except Exception:
                         pass
+                
+                # 3. 【关键修复】检查价格触发止损/止盈
+                # 限价卖单的问题：SELL @ 45 只会在价格 >= 45 时成交
+                # 所以需要主动监控价格，当价格 <= 45 时触发止损
+                try:
+                    prices = self.client.get_market_prices(self.config.market_id)
+                    if prices:
+                        current_price = prices.get(token, 0.5)
+                        
+                        # 价格格式转换（确保比较的是同一种格式）
+                        # stop_loss_price 和 take_profit_price 是美分格式（如 45, 95）
+                        # current_price 是 0-1 格式（如 0.45, 0.95）
+                        stop_loss_price_float = stop_loss_price / 100.0 if stop_loss_price > 1 else stop_loss_price
+                        take_profit_price_float = take_profit_price / 100.0 if take_profit_price > 1 else take_profit_price
+                        
+                        # 检查止损触发：价格 <= 止损价
+                        if current_price <= stop_loss_price_float:
+                            print(f"\r\n[触发] ⚠️ 价格触发止损! 当前 ${current_price:.2f} <= 止损 ${stop_loss_price_float:.2f}    ")
+                            # 取消止损止盈订单
+                            if self.stop_loss_order:
+                                self._cancel_single_order(self.stop_loss_order)
+                            if self.take_profit_order:
+                                self._cancel_single_order(self.take_profit_order)
+                            # 返回止损触发
+                            return "STOP_LOSS"
+                        
+                        # 检查止盈触发：价格 >= 止盈价
+                        if current_price >= take_profit_price_float:
+                            print(f"\r\n[触发] ✓ 价格触发止盈! 当前 ${current_price:.2f} >= 止盈 ${take_profit_price_float:.2f}    ")
+                            # 取消止损止盈订单
+                            if self.stop_loss_order:
+                                self._cancel_single_order(self.stop_loss_order)
+                            if self.take_profit_order:
+                                self._cancel_single_order(self.take_profit_order)
+                            # 返回止盈触发
+                            return "TAKE_PROFIT"
+                        
+                except Exception:
+                    pass
                 
                 last_check_time = current_time
 
@@ -1788,6 +1811,7 @@ class TradingEngine:
         position_type = position["type"]
         position_size = position["size"]
         token = position.get("token", "YES")
+        token_id = position.get("token_id")
 
         # 确保价格格式统一为 0-1 格式
         def to_float_price(price: float) -> float:
@@ -1801,9 +1825,19 @@ class TradingEngine:
 
         # 确定平仓价格
         if exit_reason == "STOP_LOSS":
-            exit_price = to_float_price(self.config.stop_loss)
+            # 止损触发：获取当前价格卖出
+            try:
+                prices = self.client.get_market_prices(self.config.market_id)
+                exit_price = to_float_price(prices.get(token, self.config.stop_loss))
+            except:
+                exit_price = to_float_price(self.config.stop_loss)
         elif exit_reason == "TAKE_PROFIT":
-            exit_price = to_float_price(self.config.take_profit)
+            # 止盈触发：获取当前价格卖出
+            try:
+                prices = self.client.get_market_prices(self.config.market_id)
+                exit_price = to_float_price(prices.get(token, self.config.take_profit))
+            except:
+                exit_price = to_float_price(self.config.take_profit)
         elif exit_reason == "TIMEOUT":
             # 到期结算：获取事件结果
             event_result = self.get_event_result()
@@ -1832,7 +1866,53 @@ class TradingEngine:
         else:
             exit_price = entry_price  # 默认按开仓价平仓
 
-        # 平仓
+        # 【关键修复】实际卖出持仓代币
+        print(f"\n[平仓] 开始执行平仓操作...")
+        print(f"  代币: {token}")
+        print(f"  平仓价格: ${exit_price:.2f}")
+        print(f"  卖出数量: {position_size} 股")
+        
+        if token_id:
+            try:
+                # 创建卖出订单（使用接近市价的价格）
+                # 对于止损/止盈，我们以当前价格附近的价格卖出
+                sell_price = int(exit_price * 100)  # 转换为美分
+                sell_order = self.client.create_order(
+                    token_id=token_id,
+                    price=sell_price,
+                    size=position_size,
+                    side="SELL",
+                    order_type="GTC",
+                )
+                
+                if sell_order and sell_order.get("success") != False:
+                    order_id = sell_order.get("orderID") or sell_order.get("order_id", "")
+                    print(f"[平仓] ✓ 卖出订单已挂: {order_id[:20] if order_id else 'N/A'}...")
+                    
+                    # 等待订单成交（最多5秒）
+                    start_wait = time.time()
+                    while time.time() - start_wait < 5:
+                        try:
+                            order_status = self.client.get_order(order_id)
+                            if order_status:
+                                filled = (
+                                    order_status.get("filled_size", 0) or
+                                    order_status.get("size_filled", 0) or
+                                    order_status.get("fills", 0) or
+                                    0
+                                )
+                                if filled > 0:
+                                    print(f"[平仓] ✓ 卖出订单已成交!")
+                                    break
+                        except:
+                            pass
+                        time.sleep(0.5)
+                else:
+                    print(f"[平仓] ✗ 卖出订单创建失败: {sell_order.get('errorMsg', 'Unknown') if sell_order else 'Empty'}")
+            except Exception as e:
+                print(f"[平仓] ✗ 卖出操作失败: {e}")
+
+        # 平仓（更新余额和记录）
         self.close_position(position_type, position_size, entry_price, exit_price, exit_reason)
 
         # 结算后重新同步真实余额（止损/止盈是实时结算，TIMEOUT需要等事件结算）
