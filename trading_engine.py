@@ -452,6 +452,31 @@ class TradingEngine:
                 self.stop()
                 sys.exit(0)
 
+    def _wait_next_cycle(self) -> None:
+        """等待到下一个5分钟周期边界"""
+        from datetime import datetime, timezone, timedelta
+        
+        edt = timezone(timedelta(hours=-4))
+        now_edt = datetime.now(edt)
+        minute = now_edt.minute
+        second = now_edt.second
+        
+        # 计算到下一个5分钟边界的时间
+        current_period_minute = (minute // 5) * 5
+        next_period_minute = current_period_minute + 5
+        
+        if next_period_minute >= 60:
+            # 跨小时
+            next_period = now_edt.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        else:
+            next_period = now_edt.replace(minute=next_period_minute, second=0, microsecond=0)
+        
+        wait_seconds = (next_period - now_edt).total_seconds()
+        
+        print(f"[等待] 等待到下一个周期边界: {next_period.strftime('%H:%M:%S')} (等待{int(wait_seconds)}秒)")
+        if wait_seconds > 0:
+            time.sleep(wait_seconds)
+
     def execute_trade_cycle(self) -> None:
         """执行一个完整的交易周期（5分钟）"""
         print("\n" + "=" * 60)
@@ -484,7 +509,6 @@ class TradingEngine:
                 print(f"[错误] 强制平仓失败: {e}")
 
         self.cycle_start_time = datetime.now()
-        cycle_duration = self.config.trade_cycle_minutes * 60  # 转换为秒
         cycle_start = time.time()
         retry_count = 0
         max_retries = 3
@@ -496,11 +520,20 @@ class TradingEngine:
             
             if not market_data:
                 print("[等待] 无法获取市场数据，等待下次周期...")
-                # 等待一个完整周期
-                elapsed = time.time() - cycle_start
-                remaining = max(0, cycle_duration - elapsed)
-                if remaining > 0:
-                    time.sleep(remaining)
+                # 等待到下一个5分钟边界
+                self._wait_next_cycle()
+                return
+            
+            # 【关键修复】使用事件的实际剩余时间
+            event_remaining = market_data.get("remaining_seconds", 300)
+            cycle_duration = int(event_remaining)
+            
+            print(f"[*] 事件剩余时间: {cycle_duration} 秒 ({cycle_duration/60:.1f} 分钟)")
+            
+            # 如果剩余时间少于30秒，跳过此周期
+            if cycle_duration < 30:
+                print(f"[跳过] 事件即将结束（剩余{cycle_duration}秒），等待下一周期...")
+                self._wait_next_cycle()
                 return
 
             # 2. 检查是否是同一事件
@@ -717,8 +750,53 @@ class TradingEngine:
             print(f"[诊断] YES token: {self.yes_token_id[:20]}...")
             print(f"[诊断] NO token: {self.no_token_id[:20]}...")
             
-            # 步骤6: 获取价格
-            print(f"[诊断] 步骤6: 获取价格...")
+            # 步骤6: 获取事件的结束时间（关键！）
+            print(f"[诊断] 步骤6: 获取事件结束时间...")
+            end_timestamp = None
+            
+            # 尝试多个可能的字段名
+            end_date_iso = market.get("end_date_iso") or market.get("endDateIso")
+            if end_date_iso:
+                try:
+                    # 解析 ISO 格式时间
+                    from datetime import datetime
+                    if isinstance(end_date_iso, str):
+                        # 处理可能的时间格式
+                        end_timestamp = datetime.fromisoformat(end_date_iso.replace('Z', '+00:00')).timestamp()
+                        print(f"[*] 事件结束时间: {end_date_iso} (Unix: {end_timestamp})")
+                except Exception as e:
+                    print(f"[!] 解析结束时间失败: {e}")
+            
+            # 如果没有 end_date_iso，尝试其他字段
+            if not end_timestamp:
+                end_ts_raw = market.get("end_timestamp") or market.get("endTimestamp") or market.get("end_ts")
+                if end_ts_raw:
+                    try:
+                        end_timestamp = float(end_ts_raw)
+                        print(f"[*] 事件结束时间戳: {end_timestamp}")
+                    except:
+                        pass
+            
+            # 如果还是没有，计算下一个5分钟边界
+            if not end_timestamp:
+                # 计算当前5分钟周期的结束时间
+                edt = timezone(timedelta(hours=-4))
+                now_edt = datetime.now(edt)
+                minute = now_edt.minute
+                current_period_minute = (minute // 5) * 5
+                next_period_minute = current_period_minute + 5
+                
+                if next_period_minute >= 60:
+                    # 跨小时
+                    next_period = now_edt.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+                else:
+                    next_period = now_edt.replace(minute=next_period_minute, second=0, microsecond=0)
+                
+                end_timestamp = next_period.timestamp()
+                print(f"[*] 计算的事件结束时间: {next_period.strftime('%H:%M:%S')} (Unix: {end_timestamp})")
+            
+            # 步骤7: 获取价格
+            print(f"[诊断] 步骤7: 获取价格...")
             prices = self.client.get_market_prices(current_market_id)
             print(f"[诊断] 价格: {prices}")
             
@@ -728,6 +806,13 @@ class TradingEngine:
             
             yes_price = prices.get("YES", 0)
             no_price = prices.get("NO", 0)
+            
+            # 计算剩余时间（秒）
+            current_timestamp = time.time()
+            remaining_seconds = max(0, end_timestamp - current_timestamp)
+            
+            print(f"[*] 当前时间: {datetime.now().strftime('%H:%M:%S')}")
+            print(f"[*] 事件剩余时间: {int(remaining_seconds)} 秒 ({remaining_seconds/60:.1f} 分钟)")
             
             # 记录更新时间
             self.last_update_time = datetime.now().strftime("%H:%M:%S")
@@ -739,6 +824,8 @@ class TradingEngine:
             return {
                 "yes_price": yes_price,
                 "no_price": no_price,
+                "end_timestamp": end_timestamp,
+                "remaining_seconds": remaining_seconds,
             }
             
         except Exception as e:
