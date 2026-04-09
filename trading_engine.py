@@ -589,44 +589,51 @@ class TradingEngine:
                             exit_price = prices.get(token, 0.5)
                             sell_price = max(1, int(exit_price * 100) - 2)
                             
-                            actual_balance = self.current_position.get("size", 0)
-                            print(f"[安全检查] 强制卖出 {token} {actual_balance}股 @ {sell_price}%")
+                            # 使用已更新的 position_size
+                            print(f"[安全检查] 强制卖出 {token} {position_size}股 @ {sell_price}%")
                             
-                            try:
-                                sell_order = self.client.create_order(
-                                    token_id=token_id,
-                                    price=sell_price,
-                                    size=actual_balance,
-                                    side="SELL",
-                                    order_type="GTC",
-                                )
-                                
-                                if sell_order and sell_order.get("success") != False:
-                                    # 等待成交
-                                    order_id = sell_order.get("orderID") or sell_order.get("order_id", "")
-                                    start_wait = time.time()
-                                    while time.time() - start_wait < 5:
-                                        try:
-                                            order_status = self.client.get_order(order_id)
-                                            if order_status:
-                                                filled = order_status.get("filled_size", 0) or order_status.get("size_filled", 0) or 0
-                                                if filled > 0:
-                                                    actual_price = order_status.get("price") or order_status.get("avg_price") or sell_price / 100.0
-                                                    if isinstance(actual_price, (int, float)) and actual_price > 1:
-                                                        actual_price = actual_price / 100.0
-                                                    self.close_position(
-                                                        self.current_position["type"],
-                                                        actual_balance,
-                                                        entry_price,
-                                                        actual_price,
-                                                        "FORCED_CLOSE"
-                                                    )
-                                                    break
-                                        except:
-                                            pass
-                                        time.sleep(0.5)
-                            except Exception as e:
-                                print(f"[安全检查] 强制卖出失败: {e}")
+                            # 检查最小股数限制
+                            MIN_SELL_SHARES = 5
+                            if position_size < MIN_SELL_SHARES:
+                                print(f"[安全检查] 股数 {position_size:.4f} < 最小卖出股数 {MIN_SELL_SHARES}")
+                                print(f"[安全检查] 跳过强制卖出，等待事件结算")
+                                self.current_position = None
+                            else:
+                                try:
+                                    sell_order = self.client.create_order(
+                                        token_id=token_id,
+                                        price=sell_price,
+                                        size=position_size,
+                                        side="SELL",
+                                        order_type="GTC",
+                                    )
+                                    
+                                    if sell_order and sell_order.get("success") != False:
+                                        # 等待成交
+                                        order_id = sell_order.get("orderID") or sell_order.get("order_id", "")
+                                        start_wait = time.time()
+                                        while time.time() - start_wait < 5:
+                                            try:
+                                                order_status = self.client.get_order(order_id)
+                                                if order_status:
+                                                    filled = order_status.get("filled_size", 0) or order_status.get("size_filled", 0) or 0
+                                                    if filled > 0:
+                                                        actual_price = order_status.get("price") or order_status.get("avg_price") or sell_price / 100.0
+                                                        if isinstance(actual_price, (int, float)) and actual_price > 1:
+                                                            actual_price = actual_price / 100.0
+                                                        self.close_position(
+                                                            self.current_position["type"],
+                                                            position_size,
+                                                            entry_price,
+                                                            actual_price,
+                                                            "FORCED_CLOSE"
+                                                        )
+                                                        break
+                                            except:
+                                                pass
+                                            time.sleep(0.5)
+                                except Exception as e:
+                                    print(f"[安全检查] 强制卖出失败: {e}")
             except Exception as e:
                 print(f"[错误] 安全检查失败: {e}")
 
@@ -1819,6 +1826,13 @@ class TradingEngine:
             print(f"[错误] 代币余额为 0，无法设置止盈单")
             return None
         
+        # Polymarket 最小股数限制
+        MIN_SELL_SHARES = 5
+        if position_size < MIN_SELL_SHARES:
+            print(f"[警告] 股数 {position_size:.4f} < 最小卖出股数 {MIN_SELL_SHARES}")
+            print(f"[止盈] 跳过止盈单设置，依赖价格监控触发")
+            return None
+        
         # GTD 订单：5 分钟后自动过期（+60秒安全缓冲）
         duration = self.config.trade_cycle_minutes * 60
         expiration = int(time.time()) + 60 + duration
@@ -2039,15 +2053,6 @@ class TradingEngine:
             skip_sell = True
         
         if not skip_sell:
-            # Polymarket 最小股数限制
-            MIN_SELL_SHARES = 5
-            if position_size < MIN_SELL_SHARES:
-                print(f"[警告] 股数 {position_size:.2f} 小于最小卖出股数 {MIN_SELL_SHARES}")
-                print(f"[警告] 无法卖出，等待事件结算...")
-                # 跳过卖出，等待事件结算
-                # 不计算盈亏（保留持仓）
-                return
-            
             print(f"[平仓] 卖出 {token} {position_size}股")
             
             if token_id:
@@ -2055,6 +2060,7 @@ class TradingEngine:
                 actual_balance = self.client.get_token_balance(token_id)
                 print(f"[平仓] 代币余额: {actual_balance} (预期: {position_size})")
                 
+                # 先用实际余额更新 position_size
                 if actual_balance <= 0:
                     print(f"[平仓] ✗ 代币余额为 0")
                     # 代币已不存在，可能是止盈订单成交或其他原因
@@ -2097,132 +2103,140 @@ class TradingEngine:
                         # 无法确定代币去向，清除持仓但不计算盈亏
                         print(f"[平仓] 代币可能已被卖出，清除持仓记录（不计盈亏）")
                         self.current_position = None
-                        return
+                    return
                 elif actual_balance < position_size:
                     print(f"[警告] 代币余额不足，调整卖出数量: {position_size} → {actual_balance}")
                     position_size = actual_balance
                     self.current_position["size"] = actual_balance
                 
-                if actual_balance > 0:
-                    # 卖出重试机制：最多重试3次
-                    max_retries = 3
-                    for retry in range(max_retries):
-                        try:
-                            # 每次重试前获取最新价格
-                            current_prices = self.client.get_market_prices(self.config.market_id)
-                            current_price = current_prices.get(token, exit_price) if current_prices else exit_price
-                            
-                            print(f"[平仓] 尝试 {retry+1}/{max_retries} | 当前价格: {int(current_price*100)}%")
-                            
-                            # 检查是否仍满足卖出条件
-                            should_sell = False
-                            if exit_reason == "STOP_LOSS":
-                                # 止损条件：价格 <= 止损价
-                                if current_price <= to_float_price(self.config.stop_loss):
-                                    should_sell = True
-                                    print(f"[平仓] 仍满足止损条件 ({int(current_price*100)}% <= {self.config.stop_loss}%)")
-                                else:
-                                    print(f"[平仓] 价格已回升，不满足止损条件 ({int(current_price*100)}% > {self.config.stop_loss}%)")
-                                    # 价格回升，返回继续监控（设置标志让外层继续监控）
-                                    print(f"[平仓] 返回继续监控...")
-                                    self._continue_monitoring = True
-                                    return
-                            elif exit_reason == "TAKE_PROFIT":
-                                # 止盈条件：价格 >= 止盈价
-                                if current_price >= to_float_price(self.config.take_profit):
-                                    should_sell = True
-                                    print(f"[平仓] 仍满足止盈条件 ({int(current_price*100)}% >= {self.config.take_profit}%)")
-                                else:
-                                    print(f"[平仓] 价格已回落，不满足止盈条件 ({int(current_price*100)}% < {self.config.take_profit}%)")
-                                    # 价格回落，返回继续监控（设置标志让外层继续监控）
-                                    print(f"[平仓] 返回继续监控...")
-                                    self._continue_monitoring = True
-                                    return
-                            elif exit_reason == "TIMEOUT":
-                                # 超时：必须卖出
+                # 检查最小股数限制（在获取实际余额后）
+                MIN_SELL_SHARES = 5
+                if position_size < MIN_SELL_SHARES:
+                    print(f"[警告] 股数 {position_size:.4f} < 最小卖出股数 {MIN_SELL_SHARES}")
+                    print(f"[警告] 无法卖出，等待事件结算...")
+                    # 清除持仓，等待事件结算
+                    self.current_position = None
+                    return
+                
+                # 卖出重试机制：最多重试3次
+                max_retries = 3
+                for retry in range(max_retries):
+                    try:
+                        # 每次重试前获取最新价格
+                        current_prices = self.client.get_market_prices(self.config.market_id)
+                        current_price = current_prices.get(token, exit_price) if current_prices else exit_price
+                        
+                        print(f"[平仓] 尝试 {retry+1}/{max_retries} | 当前价格: {int(current_price*100)}%")
+                        
+                        # 检查是否仍满足卖出条件
+                        should_sell = False
+                        if exit_reason == "STOP_LOSS":
+                            # 止损条件：价格 <= 止损价
+                            if current_price <= to_float_price(self.config.stop_loss):
                                 should_sell = True
-                            
-                            if not should_sell:
-                                # 不满足卖出条件，返回继续监控
+                                print(f"[平仓] 仍满足止损条件 ({int(current_price*100)}% <= {self.config.stop_loss}%)")
+                            else:
+                                print(f"[平仓] 价格已回升，不满足止损条件 ({int(current_price*100)}% > {self.config.stop_loss}%)")
+                                # 价格回升，返回继续监控（设置标志让外层继续监控）
+                                print(f"[平仓] 返回继续监控...")
                                 self._continue_monitoring = True
                                 return
-                            
-                            # 使用当前市场价格 - 2 确保成交
-                            sell_price = max(1, int(current_price * 100) - 2)
-                            print(f"[平仓] 卖出价格: {sell_price}% (市场价 - 2)")
-                            
-                            sell_order = self.client.create_order(
-                                token_id=token_id,
-                                price=sell_price,
-                                size=position_size,
-                                side="SELL",
-                                order_type="GTC",
-                            )
-                            
-                            if sell_order and sell_order.get("success") != False:
-                                order_id = sell_order.get("orderID") or sell_order.get("order_id", "")
-                                
-                                # 等待订单成交（最多10秒）
-                                start_wait = time.time()
-                                while time.time() - start_wait < 10:
-                                    try:
-                                        order_status = self.client.get_order(order_id)
-                                        if order_status:
-                                            filled = (
-                                                order_status.get("filled_size", 0) or
-                                                order_status.get("size_filled", 0) or
-                                                order_status.get("fills", 0) or
-                                                0
-                                            )
-                                            if filled > 0:
-                                                # 获取实际成交价格
-                                                actual_price = (
-                                                    order_status.get("price") or
-                                                    order_status.get("avg_price") or
-                                                    order_status.get("filled_price") or
-                                                    sell_price / 100.0
-                                                )
-                                                if isinstance(actual_price, (int, float)) and actual_price > 1:
-                                                    actual_price = actual_price / 100.0
-                                                # 计算成交金额
-                                                trade_amount = position_size * actual_price
-                                                print(f"[平仓] ✓ 成交 {position_size}股 @ {int(actual_price*100)}% | 金额: ${trade_amount:.2f}")
-                                                exit_price = actual_price
-                                                sell_success = True
-                                                break
-                                    except:
-                                        pass
-                                    time.sleep(0.5)
-                                
-                                if sell_success:
-                                    # 卖出成功，跳出重试
-                                    break
-                                else:
-                                    print(f"[平仓] ✗ 订单未成交，准备重试...")
-                                    # 取消未成交的订单
-                                    try:
-                                        self.client.cancel_order(order_id)
-                                    except:
-                                        pass
+                        elif exit_reason == "TAKE_PROFIT":
+                            # 止盈条件：价格 >= 止盈价
+                            if current_price >= to_float_price(self.config.take_profit):
+                                should_sell = True
+                                print(f"[平仓] 仍满足止盈条件 ({int(current_price*100)}% >= {self.config.take_profit}%)")
                             else:
-                                error_msg = sell_order.get('errorMsg', 'Unknown') if sell_order else 'Empty response'
-                                print(f"[平仓] ✗ 订单失败: {error_msg}")
-                                
-                                # 如果是余额不足错误，重新查询余额
-                                if 'balance' in error_msg.lower() or 'insufficient' in error_msg.lower():
-                                    new_balance = self.client.get_token_balance(token_id)
-                                    if new_balance > 0 and new_balance < position_size:
-                                        print(f"[平仓] 更新卖出数量: {position_size} → {new_balance}")
-                                        position_size = new_balance
-                                        self.current_position["size"] = new_balance
-                                        
-                        except Exception as e:
-                            print(f"[平仓] ✗ 卖出失败: {e}")
+                                print(f"[平仓] 价格已回落，不满足止盈条件 ({int(current_price*100)}% < {self.config.take_profit}%)")
+                                # 价格回落，返回继续监控（设置标志让外层继续监控）
+                                print(f"[平仓] 返回继续监控...")
+                                self._continue_monitoring = True
+                                return
+                        elif exit_reason == "TIMEOUT":
+                            # 超时：必须卖出
+                            should_sell = True
                         
-                        # 重试前等待
-                        if not sell_success and retry < max_retries - 1:
-                            print(f"[平仓] 等待 2 秒后重试...")
-                            time.sleep(2)
+                        if not should_sell:
+                            # 不满足卖出条件，返回继续监控
+                            self._continue_monitoring = True
+                            return
+                        
+                        # 使用当前市场价格 - 2 确保成交
+                        sell_price = max(1, int(current_price * 100) - 2)
+                        print(f"[平仓] 卖出价格: {sell_price}% (市场价 - 2)")
+                        
+                        sell_order = self.client.create_order(
+                            token_id=token_id,
+                            price=sell_price,
+                            size=position_size,
+                            side="SELL",
+                            order_type="GTC",
+                        )
+                        
+                        if sell_order and sell_order.get("success") != False:
+                            order_id = sell_order.get("orderID") or sell_order.get("order_id", "")
+                            
+                            # 等待订单成交（最多10秒）
+                            start_wait = time.time()
+                            while time.time() - start_wait < 10:
+                                try:
+                                    order_status = self.client.get_order(order_id)
+                                    if order_status:
+                                        filled = (
+                                            order_status.get("filled_size", 0) or
+                                            order_status.get("size_filled", 0) or
+                                            order_status.get("fills", 0) or
+                                            0
+                                        )
+                                        if filled > 0:
+                                            # 获取实际成交价格
+                                            actual_price = (
+                                                order_status.get("price") or
+                                                order_status.get("avg_price") or
+                                                order_status.get("filled_price") or
+                                                sell_price / 100.0
+                                            )
+                                            if isinstance(actual_price, (int, float)) and actual_price > 1:
+                                                actual_price = actual_price / 100.0
+                                            # 计算成交金额
+                                            trade_amount = position_size * actual_price
+                                            print(f"[平仓] ✓ 成交 {position_size}股 @ {int(actual_price*100)}% | 金额: ${trade_amount:.2f}")
+                                            exit_price = actual_price
+                                            sell_success = True
+                                            break
+                                except:
+                                    pass
+                                time.sleep(0.5)
+                            
+                            if sell_success:
+                                # 卖出成功，跳出重试
+                                break
+                            else:
+                                print(f"[平仓] ✗ 订单未成交，准备重试...")
+                                # 取消未成交的订单
+                                try:
+                                    self.client.cancel_order(order_id)
+                                except:
+                                    pass
+                        else:
+                            error_msg = sell_order.get('errorMsg', 'Unknown') if sell_order else 'Empty response'
+                            print(f"[平仓] ✗ 订单失败: {error_msg}")
+                            
+                            # 如果是余额不足错误，重新查询余额
+                            if 'balance' in error_msg.lower() or 'insufficient' in error_msg.lower():
+                                new_balance = self.client.get_token_balance(token_id)
+                                if new_balance > 0 and new_balance < position_size:
+                                    print(f"[平仓] 更新卖出数量: {position_size} → {new_balance}")
+                                    position_size = new_balance
+                                    self.current_position["size"] = new_balance
+                    
+                    except Exception as e:
+                        print(f"[平仓] ✗ 卖出失败: {e}")
+                    
+                    # 重试前等待
+                    if not sell_success and retry < max_retries - 1:
+                        print(f"[平仓] 等待 2 秒后重试...")
+                        time.sleep(2)
         
         # 如果卖出失败，不计算盈亏（包括 TIMEOUT）
         if not sell_success:

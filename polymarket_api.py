@@ -945,9 +945,9 @@ class PolymarketClient:
             if resp and isinstance(resp, dict):
                 balance = float(resp.get("balance", 0) or 0)
                 
-                # USDC 余额以微单位返回，需要转换
-                if balance > 10000:
-                    balance = balance / 1000000
+                # USDC 余额总是以微单位返回，需要转换为美元
+                # 1 USDC = 10^6 微单位
+                balance = balance / 1000000
                 
                 print(f"[*] SDK 返回余额: ${balance:.2f}")
                 return balance
