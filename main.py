@@ -21,7 +21,7 @@ def print_banner():
 ║                                                              ║
 ╚════════════════════════════════════════════════════════════╝
     """
-    print(banner)
+    print(banner, flush=True)
 
 
 def print_config(config: TradingConfig):

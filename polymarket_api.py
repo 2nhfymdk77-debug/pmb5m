@@ -739,13 +739,15 @@ class PolymarketClient:
         
         if not self.client:
             result["error"] = "Client not initialized"
+            print("[!] Client 未初始化", flush=True)
             return result
 
         try:
+            print("[*] 正在检查授权状态...", flush=True)
             params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
             allowance_info = self.client.get_balance_allowance(params)
             
-            print(f"[*] 检查授权状态...")
+            print(f"[*] 授权响应已收到", flush=True)
             
             if allowance_info and isinstance(allowance_info, dict):
                 # 获取余额
@@ -773,21 +775,21 @@ class PolymarketClient:
                     # 检查是否是无限授权
                     if allowance > 1e50:
                         result["allowance"] = float("inf")
-                        print(f"[*] 授权额度: 无限")
+                        print(f"[*] 授权额度: 无限", flush=True)
                     elif allowance > 10000:
                         result["allowance"] = allowance / 1000000
-                        print(f"[*] 授权额度: ${result['allowance']:.2f}")
+                        print(f"[*] 授权额度: ${result['allowance']:.2f}", flush=True)
                     else:
                         result["allowance"] = allowance
                 
-                print(f"[*] 当前余额: ${balance:.2f}")
+                print(f"[*] 当前余额: ${balance:.2f}", flush=True)
                 
                 # 如果余额 > 0，认为已初始化
                 if balance > 0:
                     result["initialized"] = True
                     
         except Exception as e:
-            print(f"[!] 检查授权失败: {e}")
+            print(f"[!] 检查授权失败: {e}", flush=True)
             result["error"] = str(e)
             result["initialized"] = True  # 继续运行，不阻塞
 

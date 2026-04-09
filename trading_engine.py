@@ -182,17 +182,19 @@ class TradingEngine:
     def start(self) -> None:
         """开始交易"""
         self.is_running = True
-        print("[启动] Polymarket 自动交易系统启动中...")
+        print("\n" + "=" * 60, flush=True)
+        print("[启动] Polymarket 自动交易系统启动中...", flush=True)
+        print("=" * 60, flush=True)
 
         # 从 Polymarket API 获取初始余额（带重试）
         max_retries = 5
         for attempt in range(max_retries):
+            print(f"\n[启动] 正在连接 API... (尝试 {attempt + 1}/{max_retries})", flush=True)
             if self._try_initialize_balance():
                 break
             if attempt < max_retries - 1:
-                print(f"\r[启动] 等待 {5} 秒后重试 ({attempt + 1}/{max_retries})...", end="", flush=True)
+                print(f"\n[启动] 等待 5 秒后重试...", flush=True)
                 time.sleep(5)
-                print()
 
         # 【优化】启动时提前确认交易参数（避免周期内延迟）
         if not self.first_order_confirmed:

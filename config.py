@@ -44,7 +44,7 @@ def load_env_variables() -> Dict[str, str]:
     # 如果可用，使用 dotenv 加载
     if DOTENV_AVAILABLE and ENV_FILE.exists():
         load_dotenv(ENV_FILE)
-        print(f"[OK] 已加载 .env 文件: {ENV_FILE}")
+        print(f"[OK] 已加载 .env 文件: {ENV_FILE}", flush=True)
 
     # 定义环境变量到配置字段的映射
     env_mapping = {
