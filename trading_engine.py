@@ -1152,11 +1152,15 @@ class TradingEngine:
         """
         并行查询所有订单状态（优化速度）
         
+        注意：会检测是否两个订单都成交（双持仓风险）
+        
         Returns:
             (order_id, order_status) 如果有订单成交，否则 None
         """
         if not self.pending_orders:
             return None
+        
+        filled_orders = []  # 记录所有成交的订单
         
         # 使用线程池并行查询所有订单
         with ThreadPoolExecutor(max_workers=2) as executor:
@@ -1166,7 +1170,7 @@ class TradingEngine:
                 for order_id in self.pending_orders.keys()
             }
             
-            # 检查结果，一旦发现成交立即返回
+            # 检查结果，收集所有成交的订单
             for future in as_completed(future_to_order):
                 order_id = future_to_order[future]
                 try:
@@ -1181,9 +1185,48 @@ class TradingEngine:
                             0
                         )
                         if filled > 0:
-                            return (order_id, order_status)
+                            filled_orders.append((order_id, order_status))
                 except Exception:
                     pass
+        
+        # 检测双持仓风险
+        if len(filled_orders) > 1:
+            print(f"\n[警告] 检测到双持仓风险！两个订单同时成交！")
+            # 选择第一个作为持仓，取消第二个
+            first_order_id, first_status = filled_orders[0]
+            second_order_id, second_status = filled_orders[1]
+            
+            # 获取第二个订单的信息
+            second_order_info = self.pending_orders.get(second_order_id, {})
+            second_token = second_order_info.get("token", "Unknown")
+            
+            print(f"[警告] 将保留第一个成交订单，卖出第二个: {second_token}")
+            
+            # 立即卖出第二个订单的持仓（市价卖出）
+            try:
+                # 获取当前价格卖出
+                prices = self.client.get_market_prices(self.config.market_id)
+                if prices:
+                    second_token_id = second_order_info.get("token_id")
+                    if second_token_id:
+                        # 创建卖出订单
+                        sell_order = self.client.create_order(
+                            token_id=second_token_id,
+                            price=99,  # 以接近100的价格卖出，相当于市价
+                            size=second_order_info.get("size", 1),
+                            side="SELL",
+                            order_type="GTC",
+                        )
+                        print(f"[警告] 已卖出第二个持仓: {second_token}")
+            except Exception as e:
+                print(f"[错误] 卖出第二个持仓失败: {e}")
+            
+            # 返回第一个成交的订单
+            return (first_order_id, first_status)
+        
+        # 返回第一个成交的订单
+        if filled_orders:
+            return filled_orders[0]
         
         return None
     
