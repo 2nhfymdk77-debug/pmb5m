@@ -626,11 +626,16 @@ class PolymarketClient:
         return token_ids
 
     def get_market_prices(self, market_id: str) -> Optional[Dict[str, float]]:
-        """获取市场价格"""
+        """获取市场价格（不使用缓存，确保实时性）"""
         try:
-            market = self.get_market_by_id(market_id)
-            if not market:
+            # 直接调用 API，不使用缓存的市场详情
+            url = f"{self.GAMMA_API_BASE}/markets/{market_id}"
+            response = requests.get(url, timeout=10)
+            
+            if response.status_code != 200:
                 return None
+            
+            market = response.json()
 
             outcome_prices = market.get("outcomePrices", [])
             if isinstance(outcome_prices, str):
