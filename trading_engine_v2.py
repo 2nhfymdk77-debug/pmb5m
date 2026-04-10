@@ -4,16 +4,24 @@
 - 达到买入价立即买入
 - 达到止损止盈价格立即卖出
 - 最小延迟，简化输出
+- 性能优化：并行请求、智能缓存、动态间隔
 """
 import time
 import math
 import sys
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 
 from config import TradingConfig
 from polymarket_api import PolymarketClient
+
+# 性能配置
+PRICE_TIMEOUT = 0.3          # 价格请求超时（秒）
+PRICE_CACHE_TTL = 0.1        # 价格缓存有效期（秒）
+MAIN_LOOP_INTERVAL = 0.02    # 主循环最小间隔（秒）
+MAX_PRICE_WORKERS = 2        # 并行获取价格的线程数
 
 
 class RealtimeTrader:
@@ -276,6 +284,70 @@ class RealtimeTrader:
     
     # ==================== 交易执行 ====================
     
+    def _get_best_ask(self, token: str) -> Optional[float]:
+        """获取卖一价格（用于买入）"""
+        token_id = self.yes_token_id if token == "YES" else self.no_token_id
+        
+        # 优先使用缓存的订单簿
+        if hasattr(self, '_orderbook_cache'):
+            cache_age = time.time() - self._orderbook_cache.get("time", 0)
+            if cache_age < 0.5:  # 缓存 0.5 秒内有效
+                book = self._orderbook_cache.get(token, {})
+                asks = book.get("asks", [])
+                if asks:
+                    best_ask = float(asks[0].get("price", 0))
+                    if best_ask > 1:
+                        best_ask = best_ask / 100.0
+                    return best_ask
+        
+        # 缓存过期，重新查询
+        try:
+            url = f"https://clob.polymarket.com/book?token_id={token_id}"
+            resp = requests.get(url, timeout=PRICE_TIMEOUT)
+            if resp.status_code == 200:
+                book = resp.json()
+                asks = book.get("asks", [])
+                if asks:
+                    best_ask = float(asks[0].get("price", 0))
+                    if best_ask > 1:
+                        best_ask = best_ask / 100.0
+                    return best_ask
+        except:
+            pass
+        return None
+    
+    def _get_best_bid(self, token: str) -> Optional[float]:
+        """获取买一价格（用于卖出）"""
+        token_id = self.yes_token_id if token == "YES" else self.no_token_id
+        
+        # 优先使用缓存的订单簿
+        if hasattr(self, '_orderbook_cache'):
+            cache_age = time.time() - self._orderbook_cache.get("time", 0)
+            if cache_age < 0.5:  # 缓存 0.5 秒内有效
+                book = self._orderbook_cache.get(token, {})
+                bids = book.get("bids", [])
+                if bids:
+                    best_bid = float(bids[0].get("price", 0))
+                    if best_bid > 1:
+                        best_bid = best_bid / 100.0
+                    return best_bid
+        
+        # 缓存过期，重新查询
+        try:
+            url = f"https://clob.polymarket.com/book?token_id={token_id}"
+            resp = requests.get(url, timeout=PRICE_TIMEOUT)
+            if resp.status_code == 200:
+                book = resp.json()
+                bids = book.get("bids", [])
+                if bids:
+                    best_bid = float(bids[0].get("price", 0))
+                    if best_bid > 1:
+                        best_bid = best_bid / 100.0
+                    return best_bid
+        except:
+            pass
+        return None
+    
     def _execute_buy(self, token: str, price: float) -> None:
         """执行买入"""
         token_id = self.yes_token_id if token == "YES" else self.no_token_id
@@ -284,26 +356,10 @@ class RealtimeTrader:
         if hasattr(self, '_buy_cooldown') and time.time() < self._buy_cooldown:
             return
         
-        # 查询盘口获取卖一价格
-        try:
-            url = f"https://clob.polymarket.com/book?token_id={token_id}"
-            resp = requests.get(url, timeout=0.5)
-            if resp.status_code == 200:
-                book = resp.json()
-                asks = book.get("asks", [])
-                if asks:
-                    # asks按价格升序，第一个是最低卖价
-                    best_ask = float(asks[0].get("price", 0))
-                    if best_ask > 1:
-                        best_ask = best_ask / 100.0
-                else:
-                    self._buy_cooldown = time.time() + 3
-                    return
-            else:
-                self._buy_cooldown = time.time() + 3
-                return
-        except:
-            self._buy_cooldown = time.time() + 3
+        # 获取卖一价格（使用缓存优化）
+        best_ask = self._get_best_ask(token)
+        if best_ask is None:
+            self._buy_cooldown = time.time() + 2
             return
         
         # 先查询最新余额
@@ -339,10 +395,10 @@ class RealtimeTrader:
             )
             
             if order and order.get("success") != False:
-                # 等待余额更新（最多10秒）
+                # 快速确认买入（最多5秒，每0.2秒检查一次）
                 actual_balance = 0.0
-                for _ in range(20):
-                    time.sleep(0.5)
+                for _ in range(25):
+                    time.sleep(0.2)
                     actual_balance = self.client.get_token_balance(token_id)
                     if actual_balance > 0:
                         break
@@ -361,15 +417,15 @@ class RealtimeTrader:
                     self._print_stats()
                 else:
                     print("[等待] 买入未立即成交，继续监控...")
-                    self._buy_cooldown = time.time() + 5
+                    self._buy_cooldown = time.time() + 3
                     self._need_check_position = True
             else:
                 error = order.get("errorMsg", "") if order else ""
                 print(f"[失败] {error}")
-                self._buy_cooldown = time.time() + 3
+                self._buy_cooldown = time.time() + 2
         except Exception as e:
             print(f"[错误] {e}")
-            self._buy_cooldown = time.time() + 3
+            self._buy_cooldown = time.time() + 2
     
     def _execute_sell(self, reason: str, price: float) -> None:
         """执行卖出"""
@@ -392,26 +448,10 @@ class RealtimeTrader:
         
         size = actual_balance
         
-        # 查询盘口获取买一价格
-        try:
-            url = f"https://clob.polymarket.com/book?token_id={token_id}"
-            resp = requests.get(url, timeout=0.5)
-            if resp.status_code == 200:
-                book = resp.json()
-                bids = book.get("bids", [])
-                if bids:
-                    # bids按价格降序，第一个是最高买价
-                    best_bid = float(bids[0].get("price", 0))
-                    if best_bid > 1:
-                        best_bid = best_bid / 100.0
-                else:
-                    self._sell_cooldown = time.time() + 3
-                    return
-            else:
-                self._sell_cooldown = time.time() + 3
-                return
-        except:
-            self._sell_cooldown = time.time() + 3
+        # 获取买一价格（使用缓存优化）
+        best_bid = self._get_best_bid(token)
+        if best_bid is None:
+            self._sell_cooldown = time.time() + 2
             return
         
         sell_price = int(best_bid * 100)
@@ -419,7 +459,7 @@ class RealtimeTrader:
         
         # 检查订单金额
         if order_amount < 1.0:
-            self._sell_cooldown = time.time() + 5
+            self._sell_cooldown = time.time() + 3
             return
         
         # 检查冷却
@@ -445,10 +485,10 @@ class RealtimeTrader:
             else:
                 error = order.get("errorMsg", "") if order else ""
                 print(f"[失败] {error}")
-                self._sell_cooldown = time.time() + 3
+                self._sell_cooldown = time.time() + 2
         except Exception as e:
             print(f"[错误] {e}")
-            self._sell_cooldown = time.time() + 3
+            self._sell_cooldown = time.time() + 2
     
     def _handle_event_end(self) -> None:
         """处理事件结束"""
@@ -660,79 +700,105 @@ class RealtimeTrader:
             return False
     
     def _get_prices_fast(self) -> Optional[Dict[str, float]]:
-        """快速获取价格 - 使用 CLOB API 获取实时订单簿价格"""
+        """快速获取价格 - 并行获取YES/NO订单簿"""
         if not self.yes_token_id or not self.no_token_id:
             return None
+        
+        # 检查缓存（避免频繁请求）
+        now = time.time()
+        if hasattr(self, '_price_cache') and now - self._price_cache_time < PRICE_CACHE_TTL:
+            return self._price_cache
         
         # 复用 requests Session
         if not hasattr(self, '_price_session'):
             self._price_session = requests.Session()
+            # 连接池优化
+            adapter = requests.adapters.HTTPAdapter(
+                pool_connections=4,
+                pool_maxsize=4,
+                max_retries=0
+            )
+            self._price_session.mount('https://', adapter)
         
+        def fetch_orderbook(token_id: str) -> dict:
+            """获取单个订单簿"""
+            try:
+                url = f"https://clob.polymarket.com/book?token_id={token_id}"
+                resp = self._price_session.get(url, timeout=PRICE_TIMEOUT)
+                if resp.status_code == 200:
+                    book = resp.json()
+                    asks = book.get("asks", [])
+                    bids = book.get("bids", [])
+                    
+                    # 排序（API通常已排序，但确保正确性）
+                    if asks:
+                        asks = sorted(asks, key=lambda x: float(x.get("price", "999")))
+                    if bids:
+                        bids = sorted(bids, key=lambda x: float(x.get("price", "0")), reverse=True)
+                    
+                    return {"asks": asks, "bids": bids}
+            except:
+                pass
+            return {"asks": [], "bids": []}
+        
+        # 并行获取 YES 和 NO 订单簿
         try:
-            # 串行获取，避免 ThreadPoolExecutor 资源泄漏
-            def fetch_orderbook(token_id: str) -> dict:
-                try:
-                    url = f"https://clob.polymarket.com/book?token_id={token_id}"
-                    resp = self._price_session.get(url, timeout=2)
-                    if resp.status_code == 200:
-                        book = resp.json()
-                        asks = book.get("asks", [])
-                        bids = book.get("bids", [])
-                        
-                        if asks:
-                            asks = sorted(asks, key=lambda x: float(x.get("price", "999")))
-                        if bids:
-                            bids = sorted(bids, key=lambda x: float(x.get("price", "0")), reverse=True)
-                        
-                        return {"asks": asks, "bids": bids}
-                except:
-                    pass
-                return {"asks": [], "bids": []}
-            
-            # 串行获取（更稳定）
-            yes_book = fetch_orderbook(self.yes_token_id)
-            no_book = fetch_orderbook(self.no_token_id)
-            
-            # 计算价格
-            def calc_price(book: dict) -> float:
-                asks = book.get("asks", [])
-                bids = book.get("bids", [])
+            with ThreadPoolExecutor(max_workers=MAX_PRICE_WORKERS) as executor:
+                future_yes = executor.submit(fetch_orderbook, self.yes_token_id)
+                future_no = executor.submit(fetch_orderbook, self.no_token_id)
                 
-                if asks and bids:
-                    best_ask = float(asks[0].get("price", 0))
-                    best_bid = float(bids[0].get("price", 0))
-                    price = (best_ask + best_bid) / 2
-                elif asks:
-                    price = float(asks[0].get("price", 0))
-                elif bids:
-                    price = float(bids[0].get("price", 0))
-                else:
-                    return 0
-                
-                # 转换为小数格式
-                if price > 1:
-                    price = price / 100.0
-                return price
-            
-            yes_price = calc_price(yes_book)
-            no_price = calc_price(no_book)
-            
-            # 验证价格合理性：YES + NO 应该接近 1
-            if yes_price > 0 and no_price > 0:
-                total = yes_price + no_price
-                if abs(total - 1.0) > 0.15:  # 偏差超过 15%
-                    no_price = 1.0 - yes_price
-            elif yes_price > 0:
-                no_price = 1.0 - yes_price
-            elif no_price > 0:
-                yes_price = 1.0 - no_price
-            else:
-                return None
-            
-            return {"YES": yes_price, "NO": no_price}
-            
-        except Exception as e:
+                yes_book = future_yes.result(timeout=PRICE_TIMEOUT + 0.1)
+                no_book = future_no.result(timeout=PRICE_TIMEOUT + 0.1)
+        except:
             return None
+        
+        # 计算价格
+        def calc_price(book: dict) -> float:
+            asks = book.get("asks", [])
+            bids = book.get("bids", [])
+            
+            if asks and bids:
+                best_ask = float(asks[0].get("price", 0))
+                best_bid = float(bids[0].get("price", 0))
+                price = (best_ask + best_bid) / 2
+            elif asks:
+                price = float(asks[0].get("price", 0))
+            elif bids:
+                price = float(bids[0].get("price", 0))
+            else:
+                return 0
+            
+            # 转换为小数格式
+            if price > 1:
+                price = price / 100.0
+            return price
+        
+        yes_price = calc_price(yes_book)
+        no_price = calc_price(no_book)
+        
+        # 验证价格合理性：YES + NO 应该接近 1
+        if yes_price > 0 and no_price > 0:
+            total = yes_price + no_price
+            if abs(total - 1.0) > 0.15:  # 偏差超过 15%
+                no_price = 1.0 - yes_price
+        elif yes_price > 0:
+            no_price = 1.0 - yes_price
+        elif no_price > 0:
+            yes_price = 1.0 - no_price
+        else:
+            return None
+        
+        # 缓存结果（同时缓存订单簿用于买入/卖出）
+        result = {"YES": yes_price, "NO": no_price}
+        self._price_cache = result
+        self._price_cache_time = now
+        self._orderbook_cache = {
+            "YES": yes_book,
+            "NO": no_book,
+            "time": now
+        }
+        
+        return result
     
     def _get_event_result(self) -> Optional[str]:
         """获取事件结果"""
