@@ -73,11 +73,12 @@ def print_menu():
     print("交互菜单:")
     print("=" * 60)
     print("  1. 开始交易 (V1 - 周期模式)")
-    print("  2. 开始交易 (V2 - 实时监控)")
-    print("  3. 修改参数")
-    print("  4. 配置API凭证")
-    print("  5. 查看交易历史")
-    print("  6. 退出")
+    print("  2. 开始交易 (V2 - 实时监控，每周期最多一次)")
+    print("  3. 开始交易 (V3 - 实时监控，无持仓可继续)")
+    print("  4. 修改参数")
+    print("  5. 配置API凭证")
+    print("  6. 查看交易历史")
+    print("  7. 退出")
     print("=" * 60)
 
 
@@ -229,7 +230,7 @@ def run_interactive_mode(config: TradingConfig) -> None:
         print_config(config)
         print_menu()
 
-        choice = input("\n请选择操作 (1-6): ").strip()
+        choice = input("\n请选择操作 (1-7): ").strip()
 
         if choice == "1":
             # 开始交易 V1
@@ -238,26 +239,33 @@ def run_interactive_mode(config: TradingConfig) -> None:
             break
 
         elif choice == "2":
-            # 开始交易 V2 (实时监控)
+            # 开始交易 V2 (实时监控，每周期最多一次)
             from trading_engine_v2 import RealtimeTrader
             trader = RealtimeTrader(config)
             trader.start()
             break
 
         elif choice == "3":
+            # 开始交易 V3 (实时监控，无持仓可继续)
+            from trading_engine_v3 import RealtimeTrader
+            trader = RealtimeTrader(config)
+            trader.start()
+            break
+
+        elif choice == "4":
             # 修改参数
             modify_parameters(config)
 
-        elif choice == "4":
+        elif choice == "5":
             # 配置API
             configure_api(config)
 
-        elif choice == "5":
+        elif choice == "6":
             # 查看历史（需要先创建引擎）
             engine = TradingEngine(config)
             view_trade_history(engine)
 
-        elif choice == "6":
+        elif choice == "7":
             # 退出
             print("\n再见!")
             sys.exit(0)
