@@ -4,24 +4,21 @@
 - 达到买入价立即买入
 - 达到止损止盈价格立即卖出
 - 最小延迟，简化输出
-- 性能优化：并行请求、智能缓存、动态间隔
+- 性能优化：智能缓存、连接池
 """
 import time
 import math
 import sys
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any
-from concurrent.futures import ThreadPoolExecutor
 import requests
 
 from config import TradingConfig
 from polymarket_api import PolymarketClient
 
 # 性能配置
-PRICE_TIMEOUT = 0.3          # 价格请求超时（秒）
 PRICE_CACHE_TTL = 0.1        # 价格缓存有效期（秒）
 MAIN_LOOP_INTERVAL = 0.02    # 主循环最小间隔（秒）
-MAX_PRICE_WORKERS = 2        # 并行获取价格的线程数
 
 
 class RealtimeTrader:
@@ -303,7 +300,7 @@ class RealtimeTrader:
         # 缓存过期，重新查询
         try:
             url = f"https://clob.polymarket.com/book?token_id={token_id}"
-            resp = requests.get(url, timeout=PRICE_TIMEOUT)
+            resp = requests.get(url, timeout=1.0)
             if resp.status_code == 200:
                 book = resp.json()
                 asks = book.get("asks", [])
@@ -335,7 +332,7 @@ class RealtimeTrader:
         # 缓存过期，重新查询
         try:
             url = f"https://clob.polymarket.com/book?token_id={token_id}"
-            resp = requests.get(url, timeout=PRICE_TIMEOUT)
+            resp = requests.get(url, timeout=1.0)
             if resp.status_code == 200:
                 book = resp.json()
                 bids = book.get("bids", [])
@@ -720,11 +717,11 @@ class RealtimeTrader:
             )
             self._price_session.mount('https://', adapter)
         
+        # 直接串行获取（更稳定，避免并行问题）
         def fetch_orderbook(token_id: str) -> dict:
-            """获取单个订单簿"""
             try:
                 url = f"https://clob.polymarket.com/book?token_id={token_id}"
-                resp = self._price_session.get(url, timeout=PRICE_TIMEOUT)
+                resp = self._price_session.get(url, timeout=1.0)
                 if resp.status_code == 200:
                     book = resp.json()
                     asks = book.get("asks", [])
@@ -737,20 +734,13 @@ class RealtimeTrader:
                         bids = sorted(bids, key=lambda x: float(x.get("price", "0")), reverse=True)
                     
                     return {"asks": asks, "bids": bids}
-            except:
+            except Exception as e:
                 pass
             return {"asks": [], "bids": []}
         
-        # 并行获取 YES 和 NO 订单簿
-        try:
-            with ThreadPoolExecutor(max_workers=MAX_PRICE_WORKERS) as executor:
-                future_yes = executor.submit(fetch_orderbook, self.yes_token_id)
-                future_no = executor.submit(fetch_orderbook, self.no_token_id)
-                
-                yes_book = future_yes.result(timeout=PRICE_TIMEOUT + 0.1)
-                no_book = future_no.result(timeout=PRICE_TIMEOUT + 0.1)
-        except:
-            return None
+        # 串行获取（更稳定）
+        yes_book = fetch_orderbook(self.yes_token_id)
+        no_book = fetch_orderbook(self.no_token_id)
         
         # 计算价格
         def calc_price(book: dict) -> float:
