@@ -12,7 +12,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any
 import requests
 
-from config import TradingConfig, TradeHistory
+from config import TradingConfig
 from polymarket_api import PolymarketClient
 
 
@@ -52,9 +52,6 @@ class RealtimeTrader:
         self.yes_token_id: Optional[str] = None
         self.no_token_id: Optional[str] = None
         self.event_end_time: float = 0
-        
-        # 交易历史
-        self.trade_history = TradeHistory()
         
         # 上次价格检查时间
         self.last_price_check = 0
