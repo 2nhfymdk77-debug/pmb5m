@@ -214,9 +214,10 @@ class RealtimeTrader:
         if hasattr(self, '_buy_cooldown') and time.time() < self._buy_cooldown:
             return  # 冷却中，继续等待
         
-        # 剩余时间太少，跳过（等待新周期）
+        # 剩余时间太少，跳过买入（等待新周期）
+        # 注意：卖出不受此限制，可正常止损/止盈
         remaining = self.event_end_time - time.time()
-        if remaining < 60:  # 最后1分钟不交易
+        if remaining < 60:  # 最后1分钟不买入
             return
         
         entry_price = self.config.entry_price / 100.0
