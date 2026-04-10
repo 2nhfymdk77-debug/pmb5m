@@ -385,49 +385,43 @@ class RealtimeTrader:
         size = actual_balance
         
         # 盘口卖出：获取当前盘口买一价，立即全部卖出
-        # 查询订单簿获取买一价（bids[0]）
+        # 高速版：减少超时和等待时间
         try:
             url = f"https://clob.polymarket.com/book?token_id={token_id}"
-            resp = requests.get(url, timeout=2)
+            resp = requests.get(url, timeout=0.5)  # 减少超时
             if resp.status_code == 200:
                 book = resp.json()
                 bids = book.get("bids", [])
                 if bids:
-                    # bids按价格降序排列，第一个是最高买价
                     best_bid = float(bids[0].get("price", 0))
                     if best_bid > 1:
-                        best_bid = best_bid / 100.0  # 转换为小数
+                        best_bid = best_bid / 100.0
                 else:
-                    print(f"\n[失败] 盘口无买单，继续监控...")
-                    self._sell_cooldown = time.time() + 5
+                    self._sell_cooldown = time.time() + 3
                     return
             else:
-                print(f"\n[失败] 获取盘口失败，继续监控...")
-                self._sell_cooldown = time.time() + 5
+                self._sell_cooldown = time.time() + 3
                 return
-        except Exception as e:
-            print(f"\n[错误] 获取盘口异常: {e}，继续监控...")
+        except:
+            self._sell_cooldown = time.time() + 3
+            return
+        
+        sell_price = int(best_bid * 100)
+        order_amount = size * best_bid
+        
+        # 检查订单金额
+        if order_amount < 1.0:
             self._sell_cooldown = time.time() + 5
             return
         
-        sell_price = int(best_bid * 100)  # 买一价（美分）
-        order_amount = size * best_bid  # 使用买一价估算金额
-        
-        # 检查订单金额是否满足最小要求（$1）
-        if order_amount < 1.0:
-            print(f"\n[跳过] 持仓价值 ${order_amount:.2f} < 最小 $1.00，等待事件结算")
-            self._sell_cooldown = time.time() + 10
-            return
-        
-        # 检查是否在卖出冷却中
+        # 检查冷却
         if hasattr(self, '_sell_cooldown') and time.time() < self._sell_cooldown:
             return
         
-        print(f"\n{'='*50}")
-        print(f"[{reason}] 盘口卖出 {token} {size:.2f}股 @ {sell_price}% (买一价)")
+        print(f"\n[{reason}] 卖出 {token} {size:.2f}股 @ {sell_price}%")
         
         try:
-            # 使用FOK订单实现盘口卖出：以市场当前最优价格立即成交
+            # FOK订单立即成交
             order = self.client.create_order(
                 token_id=token_id,
                 price=sell_price,
@@ -437,27 +431,16 @@ class RealtimeTrader:
             )
             
             if order and order.get("success") != False:
-                # FOK订单会立即返回结果，检查持仓确认成交
-                time.sleep(0.3)
-                remaining_balance = self.client.get_token_balance(token_id)
-                
-                if remaining_balance <= 0:
-                    # 持仓已清空，卖出成功
-                    actual_price = best_bid  # 使用盘口买一价作为成交价
-                    self._close_position(entry_price, actual_price, size, reason)
-                else:
-                    # FOK订单失败，继续监控
-                    print(f"[失败] 盘口卖出未成交，继续监控...")
-                    self._sell_cooldown = time.time() + 5  # 5秒冷却
+                # FOK成功即成交，直接关闭持仓
+                time.sleep(0.1)  # 最小等待
+                self._close_position(entry_price, best_bid, size, reason)
             else:
-                # 卖出失败，设置冷却
-                error = order.get("errorMsg", "Unknown") if order else "No response"
-                print(f"[失败] {error}，继续监控...")
-                self._sell_cooldown = time.time() + 5  # 5秒冷却
+                error = order.get("errorMsg", "") if order else ""
+                print(f"[失败] {error}")
+                self._sell_cooldown = time.time() + 3
         except Exception as e:
-            # 异常，设置冷却
-            print(f"[错误] {e}，继续监控...")
-            self._sell_cooldown = time.time() + 5  # 5秒冷却
+            print(f"[错误] {e}")
+            self._sell_cooldown = time.time() + 3
     
     def _handle_event_end(self) -> None:
         """处理事件结束"""
