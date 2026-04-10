@@ -134,8 +134,16 @@ class RealtimeTrader:
                 status = f"持仓 {self.position['token']}" if self.position else "卖出中"
             else:
                 status = self.state
+            
+            # 格式化剩余时间
+            if remaining >= 60:
+                mins, secs = divmod(remaining, 60)
+                time_left = f"{mins}分{secs}秒"
+            else:
+                time_left = f"{remaining}秒"
+            
             # 清除整行后打印新内容（避免残留字符）
-            line = f"[{time_str}] {status} | YES={int(yes_price*100)}% NO={int(no_price*100)}% | 剩余{remaining}s"
+            line = f"[{time_str}] {status} | YES={int(yes_price*100)}% NO={int(no_price*100)}% | 剩余{time_left}"
             print(f"\r{' '*60}\r{line}", end="", flush=True)
             self.last_price_check = now
 
@@ -568,9 +576,14 @@ class RealtimeTrader:
                     self.event_end_time = next_period.timestamp()
                 
                 remaining = max(0, int(self.event_end_time - time.time()))
+                if remaining >= 60:
+                    mins, secs = divmod(remaining, 60)
+                    time_left = f"{mins}分{secs}秒"
+                else:
+                    time_left = f"{remaining}秒"
                 print(f"\n{'='*50}")
                 print(f"[新周期] market_id: {market_id[:20]}...")
-                print(f"[新周期] 剩余: {remaining}秒")
+                print(f"[新周期] 剩余: {time_left}")
                 print(f"[新周期] YES token: {self.yes_token_id[:20] if self.yes_token_id else 'None'}...")
                 print(f"[新周期] NO token: {self.no_token_id[:20] if self.no_token_id else 'None'}...")
                 self._print_stats()
