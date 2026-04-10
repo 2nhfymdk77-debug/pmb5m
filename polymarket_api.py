@@ -919,7 +919,7 @@ class PolymarketClient:
         """
         from concurrent.futures import ThreadPoolExecutor, as_completed
         
-        def fetch_price(token_id: str) -> float:
+        def fetch_price(token_id: str, label: str) -> float:
             try:
                 url = f"https://clob.polymarket.com/book?token_id={token_id}"
                 resp = requests.get(url, timeout=timeout)
@@ -937,20 +937,23 @@ class PolymarketClient:
                     elif bids:
                         price = float(bids[0].get("price", 0.5))
                     else:
+                        print(f"[价格] {label} 订单簿为空")
                         return 0.5
                     
                     # 转换为小数格式
                     if price > 1:
                         price = price / 100.0
                     return price
-            except:
-                pass
+                else:
+                    print(f"[价格] {label} HTTP {resp.status_code}")
+            except Exception as e:
+                print(f"[价格] {label} 错误: {e}")
             return 0.5
         
         try:
             with ThreadPoolExecutor(max_workers=2) as executor:
-                future_yes = executor.submit(fetch_price, yes_token_id)
-                future_no = executor.submit(fetch_price, no_token_id)
+                future_yes = executor.submit(fetch_price, yes_token_id, "YES")
+                future_no = executor.submit(fetch_price, no_token_id, "NO")
                 
                 yes_price = future_yes.result(timeout=timeout + 1)
                 no_price = future_no.result(timeout=timeout + 1)
@@ -962,7 +965,8 @@ class PolymarketClient:
                     no_price = 1.0 - yes_price
             
             return {"YES": yes_price, "NO": no_price}
-        except:
+        except Exception as e:
+            print(f"[价格] 获取失败: {e}")
             return None
     
     # ==================== 余额方法 ====================
