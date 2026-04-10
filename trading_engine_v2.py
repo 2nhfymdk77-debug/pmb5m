@@ -384,8 +384,8 @@ class RealtimeTrader:
         
         size = actual_balance
         
-        # 盘口卖出：使用FOK订单 + 卖价=1，以市场最优价格立即成交
-        sell_price = 1
+        # 盘口卖出：使用FOK订单，以触发价格立即成交
+        sell_price = int(price * 100)  # 转换为整数美分
         order_amount = size * price  # 使用触发价格估算金额
         
         # 检查订单金额是否满足最小要求（$1）
