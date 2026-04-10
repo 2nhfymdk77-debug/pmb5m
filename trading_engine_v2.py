@@ -573,69 +573,63 @@ class RealtimeTrader:
         try:
             from concurrent.futures import ThreadPoolExecutor
             
-            def fetch_price(token_id: str) -> tuple:
-                """返回 (卖一价格, 买一价格)"""
+            def fetch_orderbook(token_id: str) -> dict:
+                """获取订单簿并返回排序后的 asks/bids"""
                 try:
                     url = f"https://clob.polymarket.com/book?token_id={token_id}"
-                    resp = requests.get(url, timeout=3)
+                    resp = requests.get(url, timeout=5)
                     if resp.status_code == 200:
                         book = resp.json()
                         asks = book.get("asks", [])
                         bids = book.get("bids", [])
                         
-                        ask_price = 0.0
-                        bid_price = 0.0
-                        
+                        # 对订单簿排序
                         if asks:
-                            ask_price = float(asks[0].get("price", 0))
+                            asks = sorted(asks, key=lambda x: float(x.get("price", "999")))
                         if bids:
-                            bid_price = float(bids[0].get("price", 0))
+                            bids = sorted(bids, key=lambda x: float(x.get("price", "0")), reverse=True)
                         
-                        # 转换为小数格式
-                        if ask_price > 1:
-                            ask_price = ask_price / 100.0
-                        if bid_price > 1:
-                            bid_price = bid_price / 100.0
-                        
-                        return (ask_price, bid_price)
+                        return {"asks": asks, "bids": bids}
                 except:
                     pass
-                return (0.0, 0.0)
+                return {"asks": [], "bids": []}
             
-            # 并行获取 YES 和 NO 价格
+            # 并行获取 YES 和 NO 订单簿
             with ThreadPoolExecutor(max_workers=2) as executor:
-                future_yes = executor.submit(fetch_price, self.yes_token_id)
-                future_no = executor.submit(fetch_price, self.no_token_id)
+                future_yes = executor.submit(fetch_orderbook, self.yes_token_id)
+                future_no = executor.submit(fetch_orderbook, self.no_token_id)
                 
-                yes_ask, yes_bid = future_yes.result(timeout=5)
-                no_ask, no_bid = future_no.result(timeout=5)
+                yes_book = future_yes.result(timeout=5)
+                no_book = future_no.result(timeout=5)
             
-            # 计算合理的价格
-            # 方法：使用买一和卖一的中间价，或者从一边推断另一边
-            yes_price = 0.0
-            no_price = 0.0
+            # 计算价格
+            def calc_price(book: dict) -> float:
+                asks = book.get("asks", [])
+                bids = book.get("bids", [])
+                
+                if asks and bids:
+                    best_ask = float(asks[0].get("price", 0))
+                    best_bid = float(bids[0].get("price", 0))
+                    price = (best_ask + best_bid) / 2
+                elif asks:
+                    price = float(asks[0].get("price", 0))
+                elif bids:
+                    price = float(bids[0].get("price", 0))
+                else:
+                    return 0
+                
+                # 转换为小数格式
+                if price > 1:
+                    price = price / 100.0
+                return price
             
-            # 如果 YES 有完整订单簿
-            if yes_ask > 0 and yes_bid > 0:
-                yes_price = (yes_ask + yes_bid) / 2
-            elif yes_ask > 0:
-                yes_price = yes_ask
-            elif yes_bid > 0:
-                yes_price = yes_bid
-            
-            # 如果 NO 有完整订单簿
-            if no_ask > 0 and no_bid > 0:
-                no_price = (no_ask + no_bid) / 2
-            elif no_ask > 0:
-                no_price = no_ask
-            elif no_bid > 0:
-                no_price = no_bid
+            yes_price = calc_price(yes_book)
+            no_price = calc_price(no_book)
             
             # 验证价格合理性：YES + NO 应该接近 1
             if yes_price > 0 and no_price > 0:
                 total = yes_price + no_price
-                if abs(total - 1.0) > 0.15:  # 如果偏差超过 15%，说明数据有问题
-                    # 使用 YES 价格推断 NO 价格
+                if abs(total - 1.0) > 0.15:  # 偏差超过 15%
                     no_price = 1.0 - yes_price
             elif yes_price > 0:
                 no_price = 1.0 - yes_price
