@@ -133,7 +133,7 @@ class RealtimeTrader:
     
     def _handle_idle(self, yes_price: float, no_price: float) -> None:
         """空闲状态 - 检查是否可以开始监控"""
-        # 如果当前事件已交易，跳过
+        # 如果当前事件已成功买入，跳过
         if self.has_traded_in_event:
             return
         
@@ -142,8 +142,6 @@ class RealtimeTrader:
         
         # 价格已经达到买入价？
         if yes_price >= entry_price or no_price >= entry_price:
-            # 立即标记已交易，防止重复进入
-            self.has_traded_in_event = True
             self.state = self.STATE_MONITORING_ENTRY
             self._print_status("监控买入", yes_price, no_price)
     
@@ -254,19 +252,24 @@ class RealtimeTrader:
                         "size": actual_balance,
                         "entry_price": price,
                     }
+                    # 成功买入后标记已交易，防止同一周期再次买入
+                    self.has_traded_in_event = True
                     self.state = self.STATE_HOLDING
                     print(f"[确认] 买入成功 {actual_balance:.2f}股")
                     self._print_stats()
                 else:
-                    print("[失败] 买入后余额为0")
-                    self.state = self.STATE_IDLE
+                    # 买入失败，可以重试
+                    print("[失败] 买入后余额为0，等待重试...")
+                    self.state = self.STATE_MONITORING_ENTRY
             else:
+                # 买入失败，可以重试
                 error = order.get("errorMsg", "Unknown") if order else "No response"
-                print(f"[失败] {error}")
-                self.state = self.STATE_IDLE
+                print(f"[失败] {error}，等待重试...")
+                self.state = self.STATE_MONITORING_ENTRY
         except Exception as e:
-            print(f"[错误] {e}")
-            self.state = self.STATE_IDLE
+            # 异常，可以重试
+            print(f"[错误] {e}，等待重试...")
+            self.state = self.STATE_MONITORING_ENTRY
     
     def _execute_sell(self, reason: str, price: float) -> None:
         """执行卖出"""
@@ -306,17 +309,22 @@ class RealtimeTrader:
                 if actual_price > 0:
                     self._close_position(entry_price, actual_price, size, reason)
                 else:
-                    print("[失败] 卖出未成交")
-                    # 取消订单
+                    # 卖出失败，取消订单并继续监控
+                    print("[失败] 卖出未成交，继续监控...")
                     try:
                         self.client.cancel_order(order_id)
                     except:
                         pass
+                    # 保持在 MONITORING_EXIT 状态继续尝试
             else:
+                # 卖出失败，继续监控
                 error = order.get("errorMsg", "Unknown") if order else "No response"
-                print(f"[失败] {error}")
+                print(f"[失败] {error}，继续监控...")
+                # 保持在 MONITORING_EXIT 状态
         except Exception as e:
-            print(f"[错误] {e}")
+            # 异常，继续监控
+            print(f"[错误] {e}，继续监控...")
+            # 保持在 MONITORING_EXIT 状态
     
     def _handle_event_end(self) -> None:
         """处理事件结束"""
@@ -453,8 +461,12 @@ class RealtimeTrader:
             # 检查是否是新事件
             if market_id != self.current_event_id:
                 self.current_event_id = market_id
-                self.has_traded_in_event = False
                 self.market_id = market_id
+                
+                # 重置所有状态（新周期停止上一周期操作）
+                self.has_traded_in_event = False
+                self.position = None
+                self.state = self.STATE_IDLE
                 
                 # 获取token IDs
                 token_ids = market.get("clobTokenIds", [])
