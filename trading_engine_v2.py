@@ -492,10 +492,13 @@ class RealtimeTrader:
         try:
             market = self.client.get_market_by_slug(slug)
             if not market:
+                # 显示获取失败信息
+                print(f"\r{' '*60}\r[获取市场] slug={slug} 未找到", end="", flush=True)
                 return False
             
             market_id = market.get("condition_id", "") or market.get("id", "")
             if not market_id:
+                print(f"\r{' '*60}\r[获取市场] market_id 为空", end="", flush=True)
                 return False
             
             # 检查是否是新事件
@@ -546,11 +549,15 @@ class RealtimeTrader:
                 
                 remaining = max(0, int(self.event_end_time - time.time()))
                 print(f"\n{'='*50}")
+                print(f"[新周期] market_id: {market_id[:20]}...")
                 print(f"[新周期] 剩余: {remaining}秒")
+                print(f"[新周期] YES token: {self.yes_token_id[:20] if self.yes_token_id else 'None'}...")
+                print(f"[新周期] NO token: {self.no_token_id[:20] if self.no_token_id else 'None'}...")
                 self._print_stats()
             
             return True
         except Exception as e:
+            print(f"\r{' '*60}\r[错误] _check_market: {e}", end="", flush=True)
             return False
     
     def _get_prices_fast(self) -> Optional[Dict[str, float]]:
