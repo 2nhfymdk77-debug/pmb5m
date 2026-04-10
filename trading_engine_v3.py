@@ -35,6 +35,11 @@ class RealtimeTrader:
     def __init__(self, config: TradingConfig):
         self.config = config
         
+        # V3 专用参数（覆盖配置）
+        self.config.entry_price = 70    # 买入触发价 70%
+        self.config.stop_loss = 45      # 止损价 45%
+        self.config.take_profit = 97    # 止盈价 97%
+        
         # 初始化API客户端
         self.client = PolymarketClient(
             private_key=config.private_key,
