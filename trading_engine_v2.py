@@ -11,7 +11,7 @@ import math
 import sys
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 import requests
 
 from config import TradingConfig
