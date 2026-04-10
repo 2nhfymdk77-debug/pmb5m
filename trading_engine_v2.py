@@ -516,8 +516,7 @@ class RealtimeTrader:
             self._sell_cooldown = time.time() + 3
             return
         
-        print(f"\n{'='*50}")
-        print(f"[{reason}] 卖出 {token} {size:.2f}股 @ {sell_price}% (买一价)")
+        print(f"\n[{reason}] 卖出 {token} {size:.2f}股 @ {sell_price}% (买一价)")
         
         try:
             # FOK订单立即成交
