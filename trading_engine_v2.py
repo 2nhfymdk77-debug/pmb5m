@@ -4,11 +4,12 @@
 - 达到买入价立即买入
 - 达到止损止盈价格立即卖出
 - 最小延迟，简化输出
-- 性能优化：智能缓存、连接池
+- 性能优化：智能缓存、连接池、后台刷新
 """
 import time
 import math
 import sys
+import threading
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any
 import requests
@@ -17,9 +18,9 @@ from config import TradingConfig
 from polymarket_api import PolymarketClient
 
 # 性能配置
-PRICE_CACHE_TTL = 1.0        # 价格缓存有效期（秒）- 平衡实时性和性能
+PRICE_CACHE_TTL = 2.0        # 价格缓存有效期（秒）
 MAIN_LOOP_INTERVAL = 0.05    # 主循环最小间隔（秒）
-REQUEST_TIMEOUT = 0.5        # HTTP 请求超时（秒）
+REQUEST_TIMEOUT = 0.3        # HTTP 请求超时（秒）
 
 
 class RealtimeTrader:
@@ -66,6 +67,13 @@ class RealtimeTrader:
         # 当前事件ID（防止重复交易）
         self.current_event_id: Optional[str] = None
         self.has_traded_in_event = False
+        
+        # 价格缓存（提前初始化，避免 hasattr 检查）
+        self._price_cache: Optional[Dict[str, float]] = None
+        self._price_cache_time: float = 0
+        self._orderbook_cache: Dict[str, Any] = {}
+        self._price_session: Optional[requests.Session] = None
+        self._refreshing_cache: bool = False  # 防止重复刷新
     
     # ==================== 核心交易逻辑 ====================
     
@@ -295,7 +303,6 @@ class RealtimeTrader:
                     book = resp.json()
                     asks = book.get("asks", [])
                     if asks:
-                        # 排序获取最低卖价
                         asks = sorted(asks, key=lambda x: float(x.get("price", "999")))
                         best_ask = float(asks[0].get("price", 0))
                         if best_ask > 1:
@@ -305,17 +312,16 @@ class RealtimeTrader:
                 pass
             return None
         
-        # 优先使用缓存的订单簿
-        if hasattr(self, '_orderbook_cache'):
-            cache_age = time.time() - self._orderbook_cache.get("time", 0)
-            if cache_age < 0.5:  # 缓存 0.5 秒内有效
-                book = self._orderbook_cache.get(token, {})
-                asks = book.get("asks", [])
-                if asks:
-                    best_ask = float(asks[0].get("price", 0))
-                    if best_ask > 1:
-                        best_ask = best_ask / 100.0
-                    return best_ask
+        # 使用缓存的订单簿
+        cache_age = time.time() - self._orderbook_cache.get("time", 0)
+        if cache_age < 1.0:  # 缓存 1 秒内有效
+            book = self._orderbook_cache.get(token, {})
+            asks = book.get("asks", [])
+            if asks:
+                best_ask = float(asks[0].get("price", 0))
+                if best_ask > 1:
+                    best_ask = best_ask / 100.0
+                return best_ask
         
         # 缓存过期，重新查询
         try:
@@ -346,7 +352,6 @@ class RealtimeTrader:
                     book = resp.json()
                     bids = book.get("bids", [])
                     if bids:
-                        # 排序获取最高买价
                         bids = sorted(bids, key=lambda x: float(x.get("price", "0")), reverse=True)
                         best_bid = float(bids[0].get("price", 0))
                         if best_bid > 1:
@@ -356,17 +361,16 @@ class RealtimeTrader:
                 pass
             return None
         
-        # 优先使用缓存的订单簿
-        if hasattr(self, '_orderbook_cache'):
-            cache_age = time.time() - self._orderbook_cache.get("time", 0)
-            if cache_age < 0.5:  # 缓存 0.5 秒内有效
-                book = self._orderbook_cache.get(token, {})
-                bids = book.get("bids", [])
-                if bids:
-                    best_bid = float(bids[0].get("price", 0))
-                    if best_bid > 1:
-                        best_bid = best_bid / 100.0
-                    return best_bid
+        # 使用缓存的订单簿
+        cache_age = time.time() - self._orderbook_cache.get("time", 0)
+        if cache_age < 1.0:  # 缓存 1 秒内有效
+            book = self._orderbook_cache.get(token, {})
+            bids = book.get("bids", [])
+            if bids:
+                best_bid = float(bids[0].get("price", 0))
+                if best_bid > 1:
+                    best_bid = best_bid / 100.0
+                return best_bid
         
         # 缓存过期，重新查询
         try:
@@ -745,19 +749,51 @@ class RealtimeTrader:
             return False
     
     def _get_prices_fast(self) -> Optional[Dict[str, float]]:
-        """快速获取价格 - 并行获取YES/NO订单簿"""
+        """快速获取价格 - 后台刷新缓存，主循环永不阻塞"""
         if not self.yes_token_id or not self.no_token_id:
             return None
         
-        # 检查缓存（避免频繁请求）
         now = time.time()
-        if hasattr(self, '_price_cache') and hasattr(self, '_price_cache_time') and now - self._price_cache_time < PRICE_CACHE_TTL:
+        
+        # 1. 缓存有效，直接返回
+        if self._price_cache is not None and now - self._price_cache_time < PRICE_CACHE_TTL:
             return self._price_cache
         
-        # 复用 requests Session
-        if not hasattr(self, '_price_session'):
+        # 2. 缓存过期，检查是否正在刷新
+        if self._refreshing_cache:
+            # 正在刷新，返回旧数据（如果有）
+            return self._price_cache
+        
+        # 3. 启动后台刷新
+        if self._price_cache is None:
+            # 首次获取，必须同步等待
+            self._refresh_cache_sync()
+        else:
+            # 非首次，后台刷新，立即返回旧数据
+            self._refresh_cache_async()
+        
+        return self._price_cache
+    
+    def _refresh_cache_async(self) -> None:
+        """后台异步刷新缓存"""
+        if self._refreshing_cache:
+            return
+        self._refreshing_cache = True
+        
+        def refresh():
+            try:
+                self._refresh_cache_sync()
+            finally:
+                self._refreshing_cache = False
+        
+        thread = threading.Thread(target=refresh, daemon=True)
+        thread.start()
+    
+    def _refresh_cache_sync(self) -> None:
+        """同步刷新缓存"""
+        # 初始化 Session
+        if self._price_session is None:
             self._price_session = requests.Session()
-            # 连接池优化
             adapter = requests.adapters.HTTPAdapter(
                 pool_connections=4,
                 pool_maxsize=4,
@@ -765,7 +801,6 @@ class RealtimeTrader:
             )
             self._price_session.mount('https://', adapter)
         
-        # 直接串行获取（更稳定，避免并行问题）
         def fetch_orderbook(token_id: str) -> dict:
             try:
                 url = f"https://clob.polymarket.com/book?token_id={token_id}"
@@ -775,18 +810,17 @@ class RealtimeTrader:
                     asks = book.get("asks", [])
                     bids = book.get("bids", [])
                     
-                    # 排序（API通常已排序，但确保正确性）
                     if asks:
                         asks = sorted(asks, key=lambda x: float(x.get("price", "999")))
                     if bids:
                         bids = sorted(bids, key=lambda x: float(x.get("price", "0")), reverse=True)
                     
                     return {"asks": asks, "bids": bids}
-            except Exception as e:
+            except:
                 pass
             return {"asks": [], "bids": []}
         
-        # 串行获取（更稳定）
+        # 串行获取
         yes_book = fetch_orderbook(self.yes_token_id)
         no_book = fetch_orderbook(self.no_token_id)
         
@@ -806,7 +840,6 @@ class RealtimeTrader:
             else:
                 return 0
             
-            # 转换为小数格式
             if price > 1:
                 price = price / 100.0
             return price
@@ -814,29 +847,27 @@ class RealtimeTrader:
         yes_price = calc_price(yes_book)
         no_price = calc_price(no_book)
         
-        # 验证价格合理性：YES + NO 应该接近 1
+        # 验证价格
         if yes_price > 0 and no_price > 0:
             total = yes_price + no_price
-            if abs(total - 1.0) > 0.15:  # 偏差超过 15%
+            if abs(total - 1.0) > 0.15:
                 no_price = 1.0 - yes_price
         elif yes_price > 0:
             no_price = 1.0 - yes_price
         elif no_price > 0:
             yes_price = 1.0 - no_price
         else:
-            return None
+            return  # 刷新失败，保留旧缓存
         
-        # 缓存结果（同时缓存订单簿用于买入/卖出）
-        result = {"YES": yes_price, "NO": no_price}
-        self._price_cache = result
+        # 更新缓存
+        now = time.time()
+        self._price_cache = {"YES": yes_price, "NO": no_price}
         self._price_cache_time = now
         self._orderbook_cache = {
             "YES": yes_book,
             "NO": no_book,
             "time": now
         }
-        
-        return result
     
     def _get_event_result(self) -> Optional[str]:
         """获取事件结果"""
