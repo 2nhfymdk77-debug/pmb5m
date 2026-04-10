@@ -582,14 +582,8 @@ class RealtimeTrader:
                         asks = book.get("asks", [])
                         bids = book.get("bids", [])
                         
-                        if asks and bids:
-                            best_ask = float(asks[0].get("price", 0))
-                            best_bid = float(bids[0].get("price", 0))
-                            if best_ask > 0 and best_bid > 0:
-                                price = (best_ask + best_bid) / 2
-                            else:
-                                price = best_ask or best_bid or 0
-                        elif asks:
+                        # 优先使用卖一价格（如果要买入，参考卖一价格）
+                        if asks:
                             price = float(asks[0].get("price", 0))
                         elif bids:
                             price = float(bids[0].get("price", 0))
