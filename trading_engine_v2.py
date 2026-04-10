@@ -285,6 +285,28 @@ class RealtimeTrader:
         if hasattr(self, '_buy_cooldown') and time.time() < self._buy_cooldown:
             return
         
+        # 查询盘口获取卖一价格
+        try:
+            url = f"https://clob.polymarket.com/book?token_id={token_id}"
+            resp = requests.get(url, timeout=0.5)
+            if resp.status_code == 200:
+                book = resp.json()
+                asks = book.get("asks", [])
+                if asks:
+                    # asks按价格升序，第一个是最低卖价
+                    best_ask = float(asks[0].get("price", 0))
+                    if best_ask > 1:
+                        best_ask = best_ask / 100.0
+                else:
+                    self._buy_cooldown = time.time() + 3
+                    return
+            else:
+                self._buy_cooldown = time.time() + 3
+                return
+        except:
+            self._buy_cooldown = time.time() + 3
+            return
+        
         # 先查询最新余额
         try:
             latest_balance = self.client.get_balance()
@@ -293,34 +315,32 @@ class RealtimeTrader:
         except:
             pass
         
-        # 计算仓位（传入价格以考虑最小股数限制）
-        position_amount = self._calculate_position(price)
+        # 计算仓位（使用卖一价格）
+        position_amount = self._calculate_position(best_ask)
         if position_amount <= 0:
-            # 余额不足，跳过本次买入
             print(f"\n[跳过] 余额 ${self.balance:.2f} 不足以开仓")
             return
         
-        shares = math.ceil(position_amount / price)
+        shares = math.ceil(position_amount / best_ask)
         if shares < 5:
             shares = 5  # 最小5股
         
-        # 显示买入前余额
+        buy_price = int(best_ask * 100)
         print(f"\n{'='*50}")
-        print(f"[买入] {token} {shares}股 @ {int(price*100)}%")
-        print(f"[余额] 当前: ${self.balance:.2f} | 开仓金额: ${position_amount:.2f}")
+        print(f"[买入] {token} {shares}股 @ {buy_price}% (卖一价)")
         
         try:
             # 使用FOK订单立即成交
             order = self.client.create_order(
                 token_id=token_id,
-                price=int(price * 100),
+                price=buy_price,
                 size=float(shares),
                 side="BUY",
                 order_type="FOK",
             )
             
             if order and order.get("success") != False:
-                # 等待余额更新（循环检查，最多10秒）
+                # 等待余额更新（最多10秒）
                 actual_balance = 0.0
                 for _ in range(20):
                     time.sleep(0.5)
@@ -333,28 +353,24 @@ class RealtimeTrader:
                         "token": token,
                         "token_id": token_id,
                         "size": actual_balance,
-                        "entry_price": price,
+                        "entry_price": best_ask,
                     }
-                    # 成功买入后标记已交易，防止同一周期再次买入
                     self.has_traded_in_event = True
                     self.state = self.STATE_HOLDING
                     self._need_check_position = False
                     print(f"[确认] 买入成功 {actual_balance:.2f}股")
                     self._print_stats()
                 else:
-                    # 买入未成交，设置冷却时间，开启持仓检查
                     print("[等待] 买入未立即成交，继续监控...")
-                    self._buy_cooldown = time.time() + 5  # 5秒冷却
-                    self._need_check_position = True  # 开启持仓检查
+                    self._buy_cooldown = time.time() + 5
+                    self._need_check_position = True
             else:
-                # 下单失败，设置冷却时间，稍后重试
-                error = order.get("errorMsg", "Unknown") if order else "No response"
-                print(f"[失败] {error}，继续监控...")
-                self._buy_cooldown = time.time() + 5  # 5秒冷却
+                error = order.get("errorMsg", "") if order else ""
+                print(f"[失败] {error}")
+                self._buy_cooldown = time.time() + 3
         except Exception as e:
-            # 异常，设置冷却时间，稍后重试
-            print(f"[错误] {e}，继续监控...")
-            self._buy_cooldown = time.time() + 5  # 5秒冷却
+            print(f"[错误] {e}")
+            self._buy_cooldown = time.time() + 3
     
     def _execute_sell(self, reason: str, price: float) -> None:
         """执行卖出"""
@@ -377,9 +393,30 @@ class RealtimeTrader:
         
         size = actual_balance
         
-        # 市价卖出：使用当前市场价格，FOK订单立即成交
-        sell_price = int(price * 100)  # 使用触发时的市场价格
-        order_amount = size * price
+        # 查询盘口获取买一价格
+        try:
+            url = f"https://clob.polymarket.com/book?token_id={token_id}"
+            resp = requests.get(url, timeout=0.5)
+            if resp.status_code == 200:
+                book = resp.json()
+                bids = book.get("bids", [])
+                if bids:
+                    # bids按价格降序，第一个是最高买价
+                    best_bid = float(bids[0].get("price", 0))
+                    if best_bid > 1:
+                        best_bid = best_bid / 100.0
+                else:
+                    self._sell_cooldown = time.time() + 3
+                    return
+            else:
+                self._sell_cooldown = time.time() + 3
+                return
+        except:
+            self._sell_cooldown = time.time() + 3
+            return
+        
+        sell_price = int(best_bid * 100)
+        order_amount = size * best_bid
         
         # 检查订单金额
         if order_amount < 1.0:
@@ -390,7 +427,7 @@ class RealtimeTrader:
         if hasattr(self, '_sell_cooldown') and time.time() < self._sell_cooldown:
             return
         
-        print(f"\n[{reason}] 卖出 {token} {size:.2f}股 @ {sell_price}%")
+        print(f"\n[{reason}] 卖出 {token} {size:.2f}股 @ {sell_price}% (买一价)")
         
         try:
             # FOK订单立即成交
@@ -405,7 +442,7 @@ class RealtimeTrader:
             if order and order.get("success") != False:
                 # FOK成功即成交
                 time.sleep(0.1)
-                self._close_position(entry_price, price, size, reason)
+                self._close_position(entry_price, best_bid, size, reason)
             else:
                 error = order.get("errorMsg", "") if order else ""
                 print(f"[失败] {error}")
