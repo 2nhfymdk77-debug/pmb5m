@@ -346,23 +346,24 @@ class RealtimeTrader:
                 order_id = order.get("orderID") or order.get("order_id", "")
                 actual_price = self._wait_for_fill(order_id, sell_price / 100.0)
                 
-                if actual_price > 0:
-                    # 卖出后再次查询持仓验证
-                    time.sleep(0.5)
-                    remaining_balance = self.client.get_token_balance(token_id)
-                    
-                    if remaining_balance <= 0:
-                        # 持仓已清空，关闭持仓
-                        self._close_position(entry_price, actual_price, size, reason)
-                    else:
-                        # 还有剩余持仓，更新持仓大小继续监控
-                        print(f"[部分成交] 剩余 {remaining_balance:.2f}股")
-                        self.position["size"] = remaining_balance
-                        # 取消可能残留的订单
-                        try:
-                            self.client.cancel_order(order_id)
-                        except:
-                            pass
+                # 不管返回什么，都检查实际持仓确认成交
+                time.sleep(0.5)
+                remaining_balance = self.client.get_token_balance(token_id)
+                
+                if remaining_balance <= 0:
+                    # 持仓已清空，关闭持仓
+                    if actual_price <= 0:
+                        actual_price = sell_price / 100.0  # 使用默认价格
+                    self._close_position(entry_price, actual_price, size, reason)
+                elif remaining_balance < size:
+                    # 部分成交
+                    print(f"[部分成交] 剩余 {remaining_balance:.2f}股")
+                    self.position["size"] = remaining_balance
+                    # 取消可能残留的订单
+                    try:
+                        self.client.cancel_order(order_id)
+                    except:
+                        pass
                 else:
                     # 卖出失败，取消订单并继续监控
                     print("[失败] 卖出未成交，继续监控...")
@@ -719,9 +720,19 @@ class RealtimeTrader:
             try:
                 status = self.client.get_order(order_id)
                 if status:
-                    filled = status.get("filled_size") or status.get("size_filled") or 0
-                    if filled > 0:
-                        price = status.get("price") or status.get("avg_price") or default_price
+                    # 检查订单状态（LIVE=活跃, FILLED=成交, CANCELED=取消）
+                    order_status = status.get("status", "").upper()
+                    
+                    # 检查成交数量
+                    filled = (status.get("filled_size") or 
+                              status.get("size_filled") or 
+                              status.get("amount_filled") or
+                              status.get("sizeMatched") or
+                              0)
+                    
+                    # 成交条件：状态为FILLED 或 成交数量>0
+                    if order_status == "FILLED" or order_status == "MATCHED" or float(filled) > 0:
+                        price = status.get("price") or status.get("avg_price") or status.get("price_avg") or default_price
                         if isinstance(price, str):
                             price = float(price)
                         if price > 1:
