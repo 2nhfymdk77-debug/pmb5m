@@ -137,16 +137,30 @@ class RealtimeTrader:
         if self.has_traded_in_event:
             return
         
+        # 剩余时间太少，跳过（等待新周期）
+        remaining = self.event_end_time - time.time()
+        if remaining < 30:
+            return
+        
         # 检查价格是否达到买入条件
         entry_price = self.config.entry_price / 100.0
         
-        # 价格已经达到买入价？
-        if yes_price >= entry_price or no_price >= entry_price:
+        # 价格达到买入价且不极端（<90%）
+        can_monitor_yes = yes_price >= entry_price and yes_price < 0.90
+        can_monitor_no = no_price >= entry_price and no_price < 0.90
+        
+        if can_monitor_yes or can_monitor_no:
             self.state = self.STATE_MONITORING_ENTRY
             self._print_status("监控买入", yes_price, no_price)
     
     def _handle_monitoring_entry(self, yes_price: float, no_price: float) -> None:
         """监控买入价格 - 等待达到目标价"""
+        # 剩余时间太少，回到空闲等待新周期
+        remaining = self.event_end_time - time.time()
+        if remaining < 30:
+            self.state = self.STATE_IDLE
+            return
+        
         entry_price = self.config.entry_price / 100.0
         
         # 输出状态（每秒一次）
@@ -155,22 +169,29 @@ class RealtimeTrader:
             self._print_status("等待买入", yes_price, no_price)
             self.last_price_check = now
         
-        # 检查是否可以买入
+        # 检查是否可以买入（价格达到买入价且不极端）
         can_buy_yes = yes_price >= entry_price and yes_price < 0.90
         can_buy_no = no_price >= entry_price and no_price < 0.90
         
-        if can_buy_yes or can_buy_no:
-            # 选择买入哪一方
-            if can_buy_yes and can_buy_no:
-                token = "YES" if yes_price >= no_price else "NO"
-                price = max(yes_price, no_price)
-            elif can_buy_yes:
-                token, price = "YES", yes_price
-            else:
-                token, price = "NO", no_price
-            
-            # 执行买入
-            self._execute_buy(token, price)
+        # 两边价格都太极端，无法买入
+        if not can_buy_yes and not can_buy_no:
+            # 价格极端（>=90%），回到空闲
+            if yes_price >= 0.90 or no_price >= 0.90:
+                print(f"\n[跳过] 价格极端 YES={int(yes_price*100)}% NO={int(no_price*100)}%")
+            self.state = self.STATE_IDLE
+            return
+        
+        # 选择买入哪一方
+        if can_buy_yes and can_buy_no:
+            token = "YES" if yes_price >= no_price else "NO"
+            price = max(yes_price, no_price)
+        elif can_buy_yes:
+            token, price = "YES", yes_price
+        else:
+            token, price = "NO", no_price
+        
+        # 执行买入
+        self._execute_buy(token, price)
     
     def _handle_holding(self, yes_price: float, no_price: float) -> None:
         """持仓状态 - 开始监控卖出"""
