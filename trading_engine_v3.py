@@ -21,7 +21,7 @@ from polymarket_api import PolymarketClient
 # 性能配置
 PRICE_CACHE_TTL = 2.0        # 价格缓存有效期（秒）
 MAIN_LOOP_INTERVAL = 0.05    # 主循环最小间隔（秒）
-REQUEST_TIMEOUT = 0.3        # HTTP 请求超时（秒）
+REQUEST_TIMEOUT = 3.0        # HTTP 请求超时（秒）
 
 
 class RealtimeTrader:
@@ -777,6 +777,9 @@ class RealtimeTrader:
         if self._price_cache is None:
             # 首次获取，必须同步等待
             self._refresh_cache_sync()
+            if self._price_cache is None:
+                # 首次获取失败，返回 None 让主循环重试
+                return None
         else:
             # 非首次，后台刷新，立即返回旧数据
             self._refresh_cache_async()
@@ -866,13 +869,9 @@ class RealtimeTrader:
         elif no_price > 0:
             yes_price = 1.0 - no_price
         else:
-            # 刷新失败，设置默认值避免无限等待
-            if self._price_cache is None:
-                # 首次获取失败，使用默认值
-                yes_price = 0.5
-                no_price = 0.5
-            else:
-                return  # 非首次失败，保留旧缓存
+            # 刷新失败，不更新缓存
+            print(f"\r[价格] 订单簿为空，跳过更新", end="", flush=True)
+            return
         
         # 更新缓存
         now = time.time()
