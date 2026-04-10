@@ -223,8 +223,14 @@ class RealtimeTrader:
         except:
             pass
         
-        # 计算仓位
-        position_amount = self._calculate_position()
+        # 计算仓位（传入价格以考虑最小股数限制）
+        position_amount = self._calculate_position(price)
+        if position_amount <= 0:
+            # 余额不足，跳过本次买入
+            print(f"\n[跳过] 余额 ${self.balance:.2f} 不足以开仓")
+            self.state = self.STATE_IDLE
+            return
+        
         shares = math.ceil(position_amount / price)
         if shares < 5:
             shares = 5  # 最小5股
@@ -536,15 +542,42 @@ class RealtimeTrader:
             pass
         return None
     
-    def _calculate_position(self) -> float:
-        """计算开仓金额"""
+    def _calculate_position(self, price: float = 0.5) -> float:
+        """计算开仓金额（考虑最小股数限制）
+        
+        Args:
+            price: 当前价格（用于计算最小股数对应的实际金额）
+        
+        Returns:
+            开仓金额（确保余额足够支付最小5股）
+        """
         base = self.initial_balance / 12.0
         multiplier = 1
         power = 0
         while self.balance >= self.initial_balance * (3 ** power):
             multiplier = 2 ** power
             power += 1
-        return max(base * multiplier, 1.0)
+        
+        position_amount = base * multiplier
+        
+        # 考虑最小股数限制：最小5股
+        # 实际最小订单金额 = 5 * price
+        min_order_amount = 5 * price
+        
+        # 确保开仓金额足够支付最小股数
+        position_amount = max(position_amount, min_order_amount, 1.0)
+        
+        # 确保余额足够
+        if position_amount > self.balance:
+            # 余额不足，使用余额的90%（留一点余地）
+            position_amount = self.balance * 0.9
+            # 但至少要能买最小股数
+            if position_amount < min_order_amount:
+                # 余额不足以买最小股数
+                print(f"[警告] 余额 ${self.balance:.2f} 不足以支付最小订单 ${min_order_amount:.2f}")
+                return 0
+        
+        return position_amount
     
     def _wait_for_fill(self, order_id: str, default_price: float, timeout: float = 10) -> float:
         """等待订单成交"""
