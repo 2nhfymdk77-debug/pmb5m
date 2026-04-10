@@ -1,10 +1,11 @@
 """
-实时交易引擎 V2
+实时交易引擎 V3
 - 实时监控价格变动
 - 达到买入价立即买入
 - 达到止损止盈价格立即卖出
 - 最小延迟，简化输出
 - 性能优化：智能缓存、连接池、后台刷新
+- V3策略：同一周期内无持仓时可继续交易
 """
 import time
 import math
@@ -168,9 +169,14 @@ class RealtimeTrader:
     
     def _handle_idle(self, yes_price: float, no_price: float) -> None:
         """空闲状态 - 检查是否可以买入"""
-        # 如果当前事件已交易，跳过（V2策略：每周期最多交易一次）
+        # 如果当前事件已交易，检查是否有持仓
         if self.has_traded_in_event:
-            return
+            # 如果有持仓，跳过
+            if self.position is not None:
+                return
+            # 如果无持仓，重置标志，允许继续交易
+            self.has_traded_in_event = False
+            print(f"\n[继续] 持仓已清空，继续监控交易机会")
         
         # 如果需要检查持仓（买入失败后可能延迟成交）- 每5次循环检查一次
         if hasattr(self, '_need_check_position') and self._need_check_position:
