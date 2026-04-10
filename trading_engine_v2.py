@@ -137,15 +137,13 @@ class RealtimeTrader:
         if self.has_traded_in_event:
             return
         
-        # 如果事件即将结束，跳过
-        if self.event_end_time - time.time() < 30:
-            return
-        
         # 检查价格是否达到买入条件
         entry_price = self.config.entry_price / 100.0
         
         # 价格已经达到买入价？
         if yes_price >= entry_price or no_price >= entry_price:
+            # 立即标记已交易，防止重复进入
+            self.has_traded_in_event = True
             self.state = self.STATE_MONITORING_ENTRY
             self._print_status("监控买入", yes_price, no_price)
     
@@ -189,6 +187,13 @@ class RealtimeTrader:
         token = self.position["token"]
         current_price = yes_price if token == "YES" else no_price
         
+        # 输出状态（每秒一次）
+        now = time.time()
+        if now - self.last_price_check >= 1.0:
+            remaining = max(0, int(self.event_end_time - now))
+            print(f"\r[持仓] {token} @ {int(current_price*100)}% | 剩余{remaining}s    ", end="", flush=True)
+            self.last_price_check = now
+        
         stop_loss = self.config.stop_loss / 100.0
         take_profit = self.config.take_profit / 100.0
         
@@ -218,7 +223,10 @@ class RealtimeTrader:
         if shares < 5:
             shares = 5  # 最小5股
         
-        print(f"\n[买入] {token} {shares}股 @ {int(price*100)}%")
+        # 显示买入前余额
+        print(f"\n{'='*50}")
+        print(f"[买入] {token} {shares}股 @ {int(price*100)}%")
+        print(f"[余额] 当前: ${self.balance:.2f} | 开仓金额: ${position_amount:.2f}")
         
         try:
             # 使用FOK订单立即成交
@@ -231,11 +239,14 @@ class RealtimeTrader:
             )
             
             if order and order.get("success") != False:
-                # 等待余额更新
-                time.sleep(2)
+                # 等待余额更新（循环检查，最多5秒）
+                actual_balance = 0.0
+                for _ in range(10):
+                    time.sleep(0.5)
+                    actual_balance = self.client.get_token_balance(token_id)
+                    if actual_balance > 0:
+                        break
                 
-                # 查询实际余额
-                actual_balance = self.client.get_token_balance(token_id)
                 if actual_balance > 0:
                     self.position = {
                         "token": token,
@@ -244,8 +255,8 @@ class RealtimeTrader:
                         "entry_price": price,
                     }
                     self.state = self.STATE_HOLDING
-                    self.has_traded_in_event = True
-                    print(f"[确认] 买入成功 {actual_balance}股")
+                    print(f"[确认] 买入成功 {actual_balance:.2f}股")
+                    self._print_stats()
                 else:
                     print("[失败] 买入后余额为0")
                     self.state = self.STATE_IDLE
@@ -275,7 +286,8 @@ class RealtimeTrader:
         # 卖出价格
         sell_price = max(1, int(price * 100) - 2)
         
-        print(f"\n[{reason}] 卖出 {token} {size:.2f}股 @ {sell_price}%")
+        print(f"\n{'='*50}")
+        print(f"[{reason}] 卖出 {token} {size:.2f}股 @ {sell_price}%")
         
         try:
             order = self.client.create_order(
@@ -320,13 +332,16 @@ class RealtimeTrader:
         # 查询实际余额
         actual_balance = self.client.get_token_balance(token_id)
         
+        print(f"\n{'='*50}")
+        print(f"[事件结束] 等待结算...")
+        
         # 检查事件是否已结算
         event_result = self._get_event_result()
         
         if event_result:
             exit_price = 1.0 if event_result == token else 0.0
-            result = "获胜" if exit_price == 1.0 else "失败"
-            print(f"\n[结算] 事件结果: {event_result}, 持仓: {token} {result}")
+            result = "获胜 ✓" if exit_price == 1.0 else "失败 ✗"
+            print(f"[结算] 结果: {event_result} | 持仓: {token} {result}")
             self._close_position(entry_price, exit_price, actual_balance, "SETTLED")
         else:
             # 尝试卖出
@@ -338,9 +353,20 @@ class RealtimeTrader:
     def _close_position(self, entry_price: float, exit_price: float, size: float, reason: str) -> None:
         """关闭持仓"""
         pnl = (exit_price - entry_price) * size
-        pnl_display = f"+{pnl:.2f}" if pnl >= 0 else f"{pnl:.2f}"
+        pnl_display = f"+${pnl:.2f}" if pnl >= 0 else f"-${abs(pnl):.2f}"
         
-        print(f"[结果] 盈亏: ${pnl_display} | 原因: {reason}")
+        # 获取更新后的余额
+        old_balance = self.balance
+        try:
+            self.balance = self.client.get_balance() or self.balance
+        except:
+            pass
+        balance_change = self.balance - old_balance
+        
+        # 盈亏结果
+        result_icon = "✓" if pnl >= 0 else "✗"
+        print(f"\n[结果] {result_icon} 盈亏: {pnl_display}")
+        print(f"[余额] ${old_balance:.2f} → ${self.balance:.2f} ({f'+${balance_change:.2f}' if balance_change >= 0 else f'-${abs(balance_change):.2f}'})")
         
         # 更新统计
         self.stats["trades"] += 1
@@ -350,20 +376,23 @@ class RealtimeTrader:
             self.stats["losses"] += 1
         self.stats["total_pnl"] += pnl
         
-        # 更新余额
-        try:
-            self.balance = self.client.get_balance() or self.balance
-        except:
-            pass
-        
         # 清除持仓
         self.position = None
         self.state = self.STATE_IDLE
         
         # 显示统计
-        win_rate = (self.stats["wins"] / self.stats["trades"] * 100) if self.stats["trades"] > 0 else 0
-        print(f"[统计] 交易: {self.stats['trades']} | 胜率: {win_rate:.1f}% | 总盈亏: ${self.stats['total_pnl']:.2f}")
-        print("-" * 50)
+        self._print_stats()
+        print("=" * 50)
+    
+    def _print_stats(self) -> None:
+        """打印统计信息"""
+        trades = self.stats["trades"]
+        wins = self.stats["wins"]
+        total_pnl = self.stats["total_pnl"]
+        win_rate = (wins / trades * 100) if trades > 0 else 0
+        pnl_display = f"+${total_pnl:.2f}" if total_pnl >= 0 else f"-${abs(total_pnl):.2f}"
+        
+        print(f"[统计] 交易: {trades}次 | 胜率: {win_rate:.0f}% ({wins}/{trades}) | 总盈亏: {pnl_display}")
     
     # ==================== 辅助方法 ====================
     
@@ -449,7 +478,10 @@ class RealtimeTrader:
                         next_period = period_start.replace(minute=next_minute)
                     self.event_end_time = next_period.timestamp()
                 
-                print(f"\n[新事件] 剩余: {int(self.event_end_time - time.time())}秒")
+                remaining = max(0, int(self.event_end_time - time.time()))
+                print(f"\n{'='*50}")
+                print(f"[新周期] 剩余: {remaining}秒")
+                self._print_stats()
             
             return True
         except Exception as e:
