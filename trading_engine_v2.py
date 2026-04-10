@@ -737,11 +737,10 @@ class RealtimeTrader:
                     time_left = f"{mins}分{secs}秒"
                 else:
                     time_left = f"{remaining}秒"
+                
+                # 简化输出
                 print(f"\n{'='*50}")
-                print(f"[新周期] market_id: {market_id[:20]}...")
-                print(f"[新周期] 剩余: {time_left}")
-                print(f"[新周期] YES token: {self.yes_token_id[:20] if self.yes_token_id else 'None'}...")
-                print(f"[新周期] NO token: {self.no_token_id[:20] if self.no_token_id else 'None'}...")
+                print(f"[新周期] 剩余 {time_left}")
                 self._print_stats()
             
             return True
