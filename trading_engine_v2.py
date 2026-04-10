@@ -516,7 +516,8 @@ class RealtimeTrader:
             self._sell_cooldown = time.time() + 3
             return
         
-        print(f"\n[{reason}] 卖出 {token} {size:.2f}股 @ {sell_price}% (买一价)")
+        print(f"\n{'='*50}")
+        print(f"[{reason}] 卖出 {token} {size:.2f}股 @ {sell_price}% (买一价)")
         
         try:
             # FOK订单立即成交
@@ -738,9 +739,8 @@ class RealtimeTrader:
                 else:
                     time_left = f"{remaining}秒"
                 
-                # 简化输出
-                print(f"\n{'='*50}")
-                print(f"[新周期] 剩余 {time_left}")
+                # 新周期只打印一行，不影响后续 \r 显示
+                print(f"\r{' '*60}\r[新周期] 剩余 {time_left}", flush=True)
                 self._print_stats()
             
             return True
