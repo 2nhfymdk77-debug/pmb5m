@@ -561,14 +561,36 @@ class RealtimeTrader:
             return False
     
     def _get_prices_fast(self) -> Optional[Dict[str, float]]:
-        """快速获取价格 - 使用并行请求"""
-        if not self.yes_token_id or not self.no_token_id:
-            return None
-        
+        """快速获取价格 - 直接调用 API，不使用缓存"""
         try:
-            # 使用快速价格获取方法
-            return self.client.get_prices_fast(self.yes_token_id, self.no_token_id, timeout=3.0)
-        except:
+            # 直接调用 Gamma API 获取价格（绕过缓存）
+            url = f"{self.client.GAMMA_API_BASE}/markets/{self.market_id}"
+            resp = requests.get(url, timeout=3)
+            
+            if resp.status_code == 200:
+                market = resp.json()
+                outcome_prices = market.get("outcomePrices", [])
+                
+                if isinstance(outcome_prices, str):
+                    import json
+                    try:
+                        outcome_prices = json.loads(outcome_prices)
+                    except:
+                        outcome_prices = []
+                
+                if isinstance(outcome_prices, list) and len(outcome_prices) >= 2:
+                    # outcomePrices 格式通常是 ["YES价格", "NO价格"]，单位是美分
+                    yes_str = outcome_prices[0]
+                    no_str = outcome_prices[1]
+                    
+                    yes_price = float(yes_str) / 100.0 if yes_str else 0.0
+                    no_price = float(no_str) / 100.0 if no_str else 0.0
+                    
+                    if yes_price > 0 and no_price > 0:
+                        return {"YES": yes_price, "NO": no_price}
+            
+            return None
+        except Exception as e:
             return None
     
     def _get_event_result(self) -> Optional[str]:
