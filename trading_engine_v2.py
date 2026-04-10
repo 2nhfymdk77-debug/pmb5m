@@ -703,7 +703,7 @@ class RealtimeTrader:
         
         # 检查缓存（避免频繁请求）
         now = time.time()
-        if hasattr(self, '_price_cache') and now - self._price_cache_time < PRICE_CACHE_TTL:
+        if hasattr(self, '_price_cache') and hasattr(self, '_price_cache_time') and now - self._price_cache_time < PRICE_CACHE_TTL:
             return self._price_cache
         
         # 复用 requests Session
