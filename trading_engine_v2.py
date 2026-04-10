@@ -573,7 +573,8 @@ class RealtimeTrader:
         try:
             from concurrent.futures import ThreadPoolExecutor
             
-            def fetch_price(token_id: str) -> float:
+            def fetch_price(token_id: str) -> tuple:
+                """返回 (卖一价格, 买一价格)"""
                 try:
                     url = f"https://clob.polymarket.com/book?token_id={token_id}"
                     resp = requests.get(url, timeout=3)
@@ -582,39 +583,66 @@ class RealtimeTrader:
                         asks = book.get("asks", [])
                         bids = book.get("bids", [])
                         
-                        # 优先使用卖一价格（如果要买入，参考卖一价格）
+                        ask_price = 0.0
+                        bid_price = 0.0
+                        
                         if asks:
-                            price = float(asks[0].get("price", 0))
-                        elif bids:
-                            price = float(bids[0].get("price", 0))
-                        else:
-                            return 0
+                            ask_price = float(asks[0].get("price", 0))
+                        if bids:
+                            bid_price = float(bids[0].get("price", 0))
                         
                         # 转换为小数格式
-                        if price > 1:
-                            price = price / 100.0
-                        return price
+                        if ask_price > 1:
+                            ask_price = ask_price / 100.0
+                        if bid_price > 1:
+                            bid_price = bid_price / 100.0
+                        
+                        return (ask_price, bid_price)
                 except:
                     pass
-                return 0
+                return (0.0, 0.0)
             
             # 并行获取 YES 和 NO 价格
             with ThreadPoolExecutor(max_workers=2) as executor:
                 future_yes = executor.submit(fetch_price, self.yes_token_id)
                 future_no = executor.submit(fetch_price, self.no_token_id)
                 
-                yes_price = future_yes.result(timeout=5)
-                no_price = future_no.result(timeout=5)
+                yes_ask, yes_bid = future_yes.result(timeout=5)
+                no_ask, no_bid = future_no.result(timeout=5)
             
-            # 如果获取失败，返回 None
-            if yes_price <= 0 and no_price <= 0:
-                return None
+            # 计算合理的价格
+            # 方法：使用买一和卖一的中间价，或者从一边推断另一边
+            yes_price = 0.0
+            no_price = 0.0
             
-            # 如果只有一边有价格，计算另一边
-            if yes_price <= 0:
-                yes_price = 1.0 - no_price
-            if no_price <= 0:
+            # 如果 YES 有完整订单簿
+            if yes_ask > 0 and yes_bid > 0:
+                yes_price = (yes_ask + yes_bid) / 2
+            elif yes_ask > 0:
+                yes_price = yes_ask
+            elif yes_bid > 0:
+                yes_price = yes_bid
+            
+            # 如果 NO 有完整订单簿
+            if no_ask > 0 and no_bid > 0:
+                no_price = (no_ask + no_bid) / 2
+            elif no_ask > 0:
+                no_price = no_ask
+            elif no_bid > 0:
+                no_price = no_bid
+            
+            # 验证价格合理性：YES + NO 应该接近 1
+            if yes_price > 0 and no_price > 0:
+                total = yes_price + no_price
+                if abs(total - 1.0) > 0.15:  # 如果偏差超过 15%，说明数据有问题
+                    # 使用 YES 价格推断 NO 价格
+                    no_price = 1.0 - yes_price
+            elif yes_price > 0:
                 no_price = 1.0 - yes_price
+            elif no_price > 0:
+                yes_price = 1.0 - no_price
+            else:
+                return None
             
             return {"YES": yes_price, "NO": no_price}
             
