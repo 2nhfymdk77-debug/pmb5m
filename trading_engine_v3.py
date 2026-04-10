@@ -250,8 +250,7 @@ class RealtimeTrader:
             token, price = "NO", no_price
         
         # 执行买入
-        print(f"\n{'='*50}")
-        print(f"[触发] {token} 达到买入价 {int(price*100)}%")
+        print(f"\n[触发] {token} 达到买入价 {int(price*100)}%")
         self._execute_buy(token, price)
     
     def _handle_holding(self, yes_price: float, no_price: float) -> None:
@@ -570,8 +569,7 @@ class RealtimeTrader:
             self.state = self.STATE_IDLE
             return
         
-        print(f"\n{'='*50}")
-        print(f"[事件结束] 等待结算...")
+        print(f"\n[事件结束] 等待结算...")
         
         # 检查事件是否已结算
         event_result = self._get_event_result()
