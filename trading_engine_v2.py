@@ -377,30 +377,9 @@ class RealtimeTrader:
         
         size = actual_balance
         
-        # 盘口卖出：获取当前盘口买一价，立即全部卖出
-        # 高速版：减少超时和等待时间
-        try:
-            url = f"https://clob.polymarket.com/book?token_id={token_id}"
-            resp = requests.get(url, timeout=0.5)  # 减少超时
-            if resp.status_code == 200:
-                book = resp.json()
-                bids = book.get("bids", [])
-                if bids:
-                    best_bid = float(bids[0].get("price", 0))
-                    if best_bid > 1:
-                        best_bid = best_bid / 100.0
-                else:
-                    self._sell_cooldown = time.time() + 3
-                    return
-            else:
-                self._sell_cooldown = time.time() + 3
-                return
-        except:
-            self._sell_cooldown = time.time() + 3
-            return
-        
-        sell_price = int(best_bid * 100)
-        order_amount = size * best_bid
+        # 市价卖出：使用当前市场价格，FOK订单立即成交
+        sell_price = int(price * 100)  # 使用触发时的市场价格
+        order_amount = size * price
         
         # 检查订单金额
         if order_amount < 1.0:
@@ -424,9 +403,9 @@ class RealtimeTrader:
             )
             
             if order and order.get("success") != False:
-                # FOK成功即成交，直接关闭持仓
-                time.sleep(0.1)  # 最小等待
-                self._close_position(entry_price, best_bid, size, reason)
+                # FOK成功即成交
+                time.sleep(0.1)
+                self._close_position(entry_price, price, size, reason)
             else:
                 error = order.get("errorMsg", "") if order else ""
                 print(f"[失败] {error}")
