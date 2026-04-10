@@ -496,13 +496,17 @@ class RealtimeTrader:
     
     def _print_stats(self) -> None:
         """打印统计信息"""
-        trades = self.stats["trades"]
-        wins = self.stats["wins"]
-        total_pnl = self.stats["total_pnl"]
-        win_rate = (wins / trades * 100) if trades > 0 else 0
-        pnl_display = f"+${total_pnl:.2f}" if total_pnl >= 0 else f"-${abs(total_pnl):.2f}"
+        # 获取最新余额
+        try:
+            current_balance = self.client.get_balance() or self.balance
+        except:
+            current_balance = self.balance
         
-        print(f"[统计] 交易: {trades}次 | 胜率: {win_rate:.0f}% ({wins}/{trades}) | 总盈亏: {pnl_display}")
+        # 计算盈亏
+        pnl = current_balance - self.initial_balance
+        pnl_display = f"+${pnl:.2f}" if pnl >= 0 else f"-${abs(pnl):.2f}"
+        
+        print(f"[统计] 初始: ${self.initial_balance:.2f} | 当前: ${current_balance:.2f} | 盈亏: {pnl_display}")
     
     # ==================== 辅助方法 ====================
     
