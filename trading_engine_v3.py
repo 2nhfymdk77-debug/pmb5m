@@ -222,7 +222,7 @@ class RealtimeTrader:
         
         # 剩余时间太少，跳过（等待新周期）
         remaining = self.event_end_time - time.time()
-        if remaining < 30:
+        if remaining < 60:  # 最后1分钟不交易
             return
         
         entry_price = self.config.entry_price / 100.0
