@@ -17,8 +17,9 @@ from config import TradingConfig
 from polymarket_api import PolymarketClient
 
 # 性能配置
-PRICE_CACHE_TTL = 0.1        # 价格缓存有效期（秒）
-MAIN_LOOP_INTERVAL = 0.02    # 主循环最小间隔（秒）
+PRICE_CACHE_TTL = 1.0        # 价格缓存有效期（秒）- 平衡实时性和性能
+MAIN_LOOP_INTERVAL = 0.05    # 主循环最小间隔（秒）
+REQUEST_TIMEOUT = 0.5        # HTTP 请求超时（秒）
 
 
 class RealtimeTrader:
@@ -289,7 +290,7 @@ class RealtimeTrader:
         if not use_cache:
             try:
                 url = f"https://clob.polymarket.com/book?token_id={token_id}"
-                resp = requests.get(url, timeout=1.0)
+                resp = requests.get(url, timeout=REQUEST_TIMEOUT)
                 if resp.status_code == 200:
                     book = resp.json()
                     asks = book.get("asks", [])
@@ -319,7 +320,7 @@ class RealtimeTrader:
         # 缓存过期，重新查询
         try:
             url = f"https://clob.polymarket.com/book?token_id={token_id}"
-            resp = requests.get(url, timeout=1.0)
+            resp = requests.get(url, timeout=REQUEST_TIMEOUT)
             if resp.status_code == 200:
                 book = resp.json()
                 asks = book.get("asks", [])
@@ -340,7 +341,7 @@ class RealtimeTrader:
         if not use_cache:
             try:
                 url = f"https://clob.polymarket.com/book?token_id={token_id}"
-                resp = requests.get(url, timeout=1.0)
+                resp = requests.get(url, timeout=REQUEST_TIMEOUT)
                 if resp.status_code == 200:
                     book = resp.json()
                     bids = book.get("bids", [])
@@ -370,7 +371,7 @@ class RealtimeTrader:
         # 缓存过期，重新查询
         try:
             url = f"https://clob.polymarket.com/book?token_id={token_id}"
-            resp = requests.get(url, timeout=1.0)
+            resp = requests.get(url, timeout=REQUEST_TIMEOUT)
             if resp.status_code == 200:
                 book = resp.json()
                 bids = book.get("bids", [])
@@ -768,7 +769,7 @@ class RealtimeTrader:
         def fetch_orderbook(token_id: str) -> dict:
             try:
                 url = f"https://clob.polymarket.com/book?token_id={token_id}"
-                resp = self._price_session.get(url, timeout=1.0)
+                resp = self._price_session.get(url, timeout=REQUEST_TIMEOUT)
                 if resp.status_code == 200:
                     book = resp.json()
                     asks = book.get("asks", [])
