@@ -56,7 +56,6 @@ class RealtimeTrader:
         
         # 上次价格检查时间
         self.last_price_check = 0
-        self.last_price = {"YES": 0.5, "NO": 0.5}
         
         # 当前事件ID（防止重复交易）
         self.current_event_id: Optional[str] = None
