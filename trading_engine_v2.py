@@ -587,8 +587,16 @@ class RealtimeTrader:
                 else:
                     return None
                 
-                outcome_prices = market.get("outcomePrices", [])
+                # 调试：打印返回的数据结构
+                print(f"\n[DEBUG] outcomePrices: {market.get('outcomePrices')}")
+                print(f"[DEBUG] bestBid: {market.get('bestBid')}, bestAsk: {market.get('bestAsk')}")
                 
+                # 尝试多种价格字段
+                outcome_prices = market.get("outcomePrices", [])
+                best_bid = market.get("bestBid")
+                best_ask = market.get("bestAsk")
+                
+                # 方法1: outcomePrices
                 if isinstance(outcome_prices, str):
                     import json
                     try:
@@ -597,7 +605,6 @@ class RealtimeTrader:
                         outcome_prices = []
                 
                 if isinstance(outcome_prices, list) and len(outcome_prices) >= 2:
-                    # outcomePrices 格式通常是 ["YES价格", "NO价格"]，单位是美分
                     yes_str = outcome_prices[0]
                     no_str = outcome_prices[1]
                     
@@ -606,9 +613,16 @@ class RealtimeTrader:
                     
                     if yes_price > 0 and no_price > 0:
                         return {"YES": yes_price, "NO": no_price}
+                
+                # 方法2: bestBid/bestAsk
+                if best_bid is not None and best_ask is not None:
+                    yes_price = float(best_ask) / 100.0 if best_ask else 0.5
+                    no_price = 1.0 - yes_price
+                    return {"YES": yes_price, "NO": no_price}
             
             return None
         except Exception as e:
+            print(f"\n[DEBUG] 价格获取错误: {e}")
             return None
     
     def _get_event_result(self) -> Optional[str]:
