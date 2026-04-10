@@ -10,10 +10,9 @@ import math
 import sys
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any
-from concurrent.futures import ThreadPoolExecutor
 import requests
 
-from config import TradingConfig, TradeRecord, TradeHistory
+from config import TradingConfig, TradeHistory
 from polymarket_api import PolymarketClient
 
 
@@ -50,7 +49,6 @@ class RealtimeTrader:
         
         # 当前市场
         self.market_id: Optional[str] = None
-        self.real_market_id: Optional[str] = None  # 真实的市场 ID（用于价格查询）
         self.yes_token_id: Optional[str] = None
         self.no_token_id: Optional[str] = None
         self.event_end_time: float = 0
@@ -58,12 +56,8 @@ class RealtimeTrader:
         # 交易历史
         self.trade_history = TradeHistory()
         
-        # 统计
-        self.stats = {"trades": 0, "wins": 0, "losses": 0, "total_pnl": 0.0}
-        
         # 上次价格检查时间
         self.last_price_check = 0
-        self.last_price = {"YES": 0.5, "NO": 0.5}
         
         # 当前事件ID（防止重复交易）
         self.current_event_id: Optional[str] = None
@@ -508,14 +502,6 @@ class RealtimeTrader:
         print(f"\n[结果] {result_icon} 盈亏: {pnl_display}")
         print(f"[余额] ${old_balance:.2f} → ${self.balance:.2f} ({f'+${balance_change:.2f}' if balance_change >= 0 else f'-${abs(balance_change):.2f}'})")
         
-        # 更新统计
-        self.stats["trades"] += 1
-        if pnl >= 0:
-            self.stats["wins"] += 1
-        else:
-            self.stats["losses"] += 1
-        self.stats["total_pnl"] += pnl
-        
         # 清除持仓
         self.position = None
         self.state = self.STATE_IDLE
@@ -605,7 +591,6 @@ class RealtimeTrader:
             if market_id != self.current_event_id:
                 self.current_event_id = market_id
                 self.market_id = market_id
-                self.real_market_id = market.get("id", "")  # 保存真实的市场 ID
                 
                 # 新周期重置所有状态（原周期代币由平台自动结算）
                 self.has_traded_in_event = False
