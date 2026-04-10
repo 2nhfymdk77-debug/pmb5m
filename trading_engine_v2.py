@@ -166,37 +166,43 @@ class RealtimeTrader:
         if self.has_traded_in_event:
             return
         
-        # 如果需要检查持仓（买入失败后可能延迟成交）
+        # 如果需要检查持仓（买入失败后可能延迟成交）- 每5次循环检查一次
         if hasattr(self, '_need_check_position') and self._need_check_position:
-            if self.yes_token_id:
-                yes_balance = self.client.get_token_balance(self.yes_token_id)
-                if yes_balance > 0:
-                    self.position = {
-                        "token": "YES",
-                        "token_id": self.yes_token_id,
-                        "size": yes_balance,
-                        "entry_price": self.config.entry_price / 100.0,
-                    }
-                    self.has_traded_in_event = True
-                    self.state = self.STATE_HOLDING
-                    self._need_check_position = False
-                    print(f"\n[发现] 已有 YES 持仓 {yes_balance:.2f}股")
-                    return
+            if not hasattr(self, '_position_check_counter'):
+                self._position_check_counter = 0
+            self._position_check_counter += 1
             
-            if self.no_token_id:
-                no_balance = self.client.get_token_balance(self.no_token_id)
-                if no_balance > 0:
-                    self.position = {
-                        "token": "NO",
-                        "token_id": self.no_token_id,
-                        "size": no_balance,
-                        "entry_price": self.config.entry_price / 100.0,
-                    }
-                    self.has_traded_in_event = True
-                    self.state = self.STATE_HOLDING
-                    self._need_check_position = False
-                    print(f"\n[发现] 已有 NO 持仓 {no_balance:.2f}股")
-                    return
+            if self._position_check_counter >= 5:  # 每5次循环检查一次
+                self._position_check_counter = 0
+                if self.yes_token_id:
+                    yes_balance = self.client.get_token_balance(self.yes_token_id)
+                    if yes_balance > 0:
+                        self.position = {
+                            "token": "YES",
+                            "token_id": self.yes_token_id,
+                            "size": yes_balance,
+                            "entry_price": self.config.entry_price / 100.0,
+                        }
+                        self.has_traded_in_event = True
+                        self.state = self.STATE_HOLDING
+                        self._need_check_position = False
+                        print(f"\n[发现] 已有 YES 持仓 {yes_balance:.2f}股")
+                        return
+                
+                if self.no_token_id:
+                    no_balance = self.client.get_token_balance(self.no_token_id)
+                    if no_balance > 0:
+                        self.position = {
+                            "token": "NO",
+                            "token_id": self.no_token_id,
+                            "size": no_balance,
+                            "entry_price": self.config.entry_price / 100.0,
+                        }
+                        self.has_traded_in_event = True
+                        self.state = self.STATE_HOLDING
+                        self._need_check_position = False
+                        print(f"\n[发现] 已有 NO 持仓 {no_balance:.2f}股")
+                        return
         
         # 检查是否在买入冷却中
         if hasattr(self, '_buy_cooldown') and time.time() < self._buy_cooldown:
@@ -490,16 +496,20 @@ class RealtimeTrader:
         self.position = None
         self.state = self.STATE_IDLE
         
-        # 显示统计
-        self._print_stats()
+        # 显示统计（获取最新余额）
+        self._print_stats(fetch_balance=True)
         print("=" * 50)
     
-    def _print_stats(self) -> None:
+    def _print_stats(self, fetch_balance: bool = False) -> None:
         """打印统计信息"""
-        # 获取最新余额
-        try:
-            current_balance = self.client.get_balance() or self.balance
-        except:
+        # 只在需要时获取最新余额
+        if fetch_balance:
+            try:
+                current_balance = self.client.get_balance() or self.balance
+                self.balance = current_balance  # 更新缓存
+            except:
+                current_balance = self.balance
+        else:
             current_balance = self.balance
         
         # 计算盈亏
@@ -640,20 +650,21 @@ class RealtimeTrader:
         if not self.yes_token_id or not self.no_token_id:
             return None
         
+        # 复用 requests Session
+        if not hasattr(self, '_price_session'):
+            self._price_session = requests.Session()
+        
         try:
-            from concurrent.futures import ThreadPoolExecutor
-            
+            # 串行获取，避免 ThreadPoolExecutor 资源泄漏
             def fetch_orderbook(token_id: str) -> dict:
-                """获取订单簿并返回排序后的 asks/bids"""
                 try:
                     url = f"https://clob.polymarket.com/book?token_id={token_id}"
-                    resp = requests.get(url, timeout=2)  # 减少超时时间
+                    resp = self._price_session.get(url, timeout=2)
                     if resp.status_code == 200:
                         book = resp.json()
                         asks = book.get("asks", [])
                         bids = book.get("bids", [])
                         
-                        # 对订单簿排序
                         if asks:
                             asks = sorted(asks, key=lambda x: float(x.get("price", "999")))
                         if bids:
@@ -664,13 +675,9 @@ class RealtimeTrader:
                     pass
                 return {"asks": [], "bids": []}
             
-            # 并行获取 YES 和 NO 订单簿
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                future_yes = executor.submit(fetch_orderbook, self.yes_token_id)
-                future_no = executor.submit(fetch_orderbook, self.no_token_id)
-                
-                yes_book = future_yes.result(timeout=3)  # 减少超时时间
-                no_book = future_no.result(timeout=3)
+            # 串行获取（更稳定）
+            yes_book = fetch_orderbook(self.yes_token_id)
+            no_book = fetch_orderbook(self.no_token_id)
             
             # 计算价格
             def calc_price(book: dict) -> float:
