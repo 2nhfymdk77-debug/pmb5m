@@ -81,7 +81,7 @@ class RealtimeTrader:
     def start(self) -> None:
         """启动实时交易"""
         print("\n" + "=" * 50)
-        print("  实时交易引擎 V2")
+        print("  实时交易引擎 V3")
         print("=" * 50)
         
         # 初始化余额
@@ -488,6 +488,10 @@ class RealtimeTrader:
         if not self.position:
             return
         
+        # 检查冷却（最优先检查）
+        if hasattr(self, '_sell_cooldown') and time.time() < self._sell_cooldown:
+            return
+        
         token = self.position["token"]
         token_id = self.position["token_id"]
         entry_price = self.position["entry_price"]
@@ -516,10 +520,6 @@ class RealtimeTrader:
         # 检查订单金额
         if order_amount < 1.0:
             self._sell_cooldown = time.time() + 3
-            return
-        
-        # 检查冷却
-        if hasattr(self, '_sell_cooldown') and time.time() < self._sell_cooldown:
             return
         
         print(f"\n[{reason}] 卖出 {token} {size:.2f}股 @ {sell_price}% (买一价)")
