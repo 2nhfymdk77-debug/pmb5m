@@ -215,6 +215,14 @@ class RealtimeTrader:
         """执行买入"""
         token_id = self.yes_token_id if token == "YES" else self.no_token_id
         
+        # 先查询最新余额
+        try:
+            latest_balance = self.client.get_balance()
+            if latest_balance is not None:
+                self.balance = latest_balance
+        except:
+            pass
+        
         # 计算仓位
         position_amount = self._calculate_position()
         shares = math.ceil(position_amount / price)
