@@ -384,9 +384,34 @@ class RealtimeTrader:
         
         size = actual_balance
         
-        # 盘口卖出：使用FOK订单，以触发价格立即成交
-        sell_price = int(price * 100)  # 转换为整数美分
-        order_amount = size * price  # 使用触发价格估算金额
+        # 盘口卖出：获取当前盘口买一价，立即全部卖出
+        # 查询订单簿获取买一价（bids[0]）
+        try:
+            url = f"https://clob.polymarket.com/book?token_id={token_id}"
+            resp = requests.get(url, timeout=2)
+            if resp.status_code == 200:
+                book = resp.json()
+                bids = book.get("bids", [])
+                if bids:
+                    # bids按价格降序排列，第一个是最高买价
+                    best_bid = float(bids[0].get("price", 0))
+                    if best_bid > 1:
+                        best_bid = best_bid / 100.0  # 转换为小数
+                else:
+                    print(f"\n[失败] 盘口无买单，继续监控...")
+                    self._sell_cooldown = time.time() + 5
+                    return
+            else:
+                print(f"\n[失败] 获取盘口失败，继续监控...")
+                self._sell_cooldown = time.time() + 5
+                return
+        except Exception as e:
+            print(f"\n[错误] 获取盘口异常: {e}，继续监控...")
+            self._sell_cooldown = time.time() + 5
+            return
+        
+        sell_price = int(best_bid * 100)  # 买一价（美分）
+        order_amount = size * best_bid  # 使用买一价估算金额
         
         # 检查订单金额是否满足最小要求（$1）
         if order_amount < 1.0:
@@ -399,7 +424,7 @@ class RealtimeTrader:
             return
         
         print(f"\n{'='*50}")
-        print(f"[{reason}] 盘口卖出 {token} {size:.2f}股")
+        print(f"[{reason}] 盘口卖出 {token} {size:.2f}股 @ {sell_price}% (买一价)")
         
         try:
             # 使用FOK订单实现盘口卖出：以市场当前最优价格立即成交
@@ -418,12 +443,11 @@ class RealtimeTrader:
                 
                 if remaining_balance <= 0:
                     # 持仓已清空，卖出成功
-                    # 获取实际成交价格（使用当前市场价格作为参考）
-                    actual_price = price  # 使用触发时的价格作为成交价
+                    actual_price = best_bid  # 使用盘口买一价作为成交价
                     self._close_position(entry_price, actual_price, size, reason)
                 else:
                     # FOK订单失败，继续监控
-                    print(f"[失败] 市价卖出未成交，继续监控...")
+                    print(f"[失败] 盘口卖出未成交，继续监控...")
                     self._sell_cooldown = time.time() + 5  # 5秒冷却
             else:
                 # 卖出失败，设置冷却
