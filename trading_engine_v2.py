@@ -384,14 +384,13 @@ class RealtimeTrader:
         
         size = actual_balance
         
-        # 卖出价格
-        sell_price = max(1, int(price * 100) - 2)
+        # 盘口卖出：使用FOK订单 + 卖价=1，以市场最优价格立即成交
+        sell_price = 1
+        order_amount = size * price  # 使用触发价格估算金额
         
         # 检查订单金额是否满足最小要求（$1）
-        order_amount = size * sell_price / 100.0
         if order_amount < 1.0:
-            print(f"\n[跳过] 订单金额 ${order_amount:.2f} < 最小 $1.00，等待事件结算")
-            # 设置冷却，避免频繁打印
+            print(f"\n[跳过] 持仓价值 ${order_amount:.2f} < 最小 $1.00，等待事件结算")
             self._sell_cooldown = time.time() + 10
             return
         
@@ -400,47 +399,31 @@ class RealtimeTrader:
             return
         
         print(f"\n{'='*50}")
-        print(f"[{reason}] 卖出 {token} {size:.2f}股 @ {sell_price}%")
+        print(f"[{reason}] 盘口卖出 {token} {size:.2f}股")
         
         try:
+            # 使用FOK订单实现盘口卖出：以市场当前最优价格立即成交
             order = self.client.create_order(
                 token_id=token_id,
                 price=sell_price,
                 size=size,
                 side="SELL",
-                order_type="GTC",
+                order_type="FOK",
             )
             
             if order and order.get("success") != False:
-                # 等待成交
-                order_id = order.get("orderID") or order.get("order_id", "")
-                actual_price = self._wait_for_fill(order_id, sell_price / 100.0)
-                
-                # 不管返回什么，都检查实际持仓确认成交
-                time.sleep(0.5)
+                # FOK订单会立即返回结果，检查持仓确认成交
+                time.sleep(0.3)
                 remaining_balance = self.client.get_token_balance(token_id)
                 
                 if remaining_balance <= 0:
-                    # 持仓已清空，关闭持仓
-                    if actual_price <= 0:
-                        actual_price = sell_price / 100.0  # 使用默认价格
+                    # 持仓已清空，卖出成功
+                    # 获取实际成交价格（使用当前市场价格作为参考）
+                    actual_price = price  # 使用触发时的价格作为成交价
                     self._close_position(entry_price, actual_price, size, reason)
-                elif remaining_balance < size:
-                    # 部分成交
-                    print(f"[部分成交] 剩余 {remaining_balance:.2f}股")
-                    self.position["size"] = remaining_balance
-                    # 取消可能残留的订单
-                    try:
-                        self.client.cancel_order(order_id)
-                    except:
-                        pass
                 else:
-                    # 卖出失败，取消订单，设置冷却
-                    print("[失败] 卖出未成交，继续监控...")
-                    try:
-                        self.client.cancel_order(order_id)
-                    except:
-                        pass
+                    # FOK订单失败，继续监控
+                    print(f"[失败] 市价卖出未成交，继续监控...")
                     self._sell_cooldown = time.time() + 5  # 5秒冷却
             else:
                 # 卖出失败，设置冷却
