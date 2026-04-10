@@ -51,6 +51,7 @@ class RealtimeTrader:
         
         # 当前市场
         self.market_id: Optional[str] = None
+        self.real_market_id: Optional[str] = None  # 真实的市场 ID（用于价格查询）
         self.yes_token_id: Optional[str] = None
         self.no_token_id: Optional[str] = None
         self.event_end_time: float = 0
@@ -505,6 +506,7 @@ class RealtimeTrader:
             if market_id != self.current_event_id:
                 self.current_event_id = market_id
                 self.market_id = market_id
+                self.real_market_id = market.get("id", "")  # 保存真实的市场 ID
                 
                 # 新周期重置所有状态（原周期代币由平台自动结算）
                 self.has_traded_in_event = False
@@ -563,12 +565,28 @@ class RealtimeTrader:
     def _get_prices_fast(self) -> Optional[Dict[str, float]]:
         """快速获取价格 - 直接调用 API，不使用缓存"""
         try:
+            # 优先使用真实的市场 ID
+            market_id_to_use = self.real_market_id or self.market_id
+            
             # 直接调用 Gamma API 获取价格（绕过缓存）
-            url = f"{self.client.GAMMA_API_BASE}/markets/{self.market_id}"
+            url = f"{self.client.GAMMA_API_BASE}/markets/{market_id_to_use}"
             resp = requests.get(url, timeout=3)
             
+            if resp.status_code != 200:
+                # 尝试使用 condition_id 查询
+                url = f"{self.client.GAMMA_API_BASE}/markets?condition_id={self.market_id}"
+                resp = requests.get(url, timeout=3)
+            
             if resp.status_code == 200:
-                market = resp.json()
+                data = resp.json()
+                # 可能返回列表
+                if isinstance(data, list) and len(data) > 0:
+                    market = data[0]
+                elif isinstance(data, dict):
+                    market = data
+                else:
+                    return None
+                
                 outcome_prices = market.get("outcomePrices", [])
                 
                 if isinstance(outcome_prices, str):
