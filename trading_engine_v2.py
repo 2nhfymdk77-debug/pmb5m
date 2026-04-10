@@ -10,10 +10,9 @@ import math
 import sys
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any
-from concurrent.futures import ThreadPoolExecutor
 import requests
 
-from config import TradingConfig, TradeRecord, TradeHistory
+from config import TradingConfig
 from polymarket_api import PolymarketClient
 
 
@@ -54,12 +53,6 @@ class RealtimeTrader:
         self.yes_token_id: Optional[str] = None
         self.no_token_id: Optional[str] = None
         self.event_end_time: float = 0
-        
-        # 交易历史
-        self.trade_history = TradeHistory()
-        
-        # 统计
-        self.stats = {"trades": 0, "wins": 0, "losses": 0, "total_pnl": 0.0}
         
         # 上次价格检查时间
         self.last_price_check = 0
@@ -498,19 +491,11 @@ class RealtimeTrader:
         print(f"\n[结果] {result_icon} 盈亏: {pnl_display}")
         print(f"[余额] ${old_balance:.2f} → ${self.balance:.2f} ({f'+${balance_change:.2f}' if balance_change >= 0 else f'-${abs(balance_change):.2f}'})")
         
-        # 更新统计
-        self.stats["trades"] += 1
-        if pnl >= 0:
-            self.stats["wins"] += 1
-        else:
-            self.stats["losses"] += 1
-        self.stats["total_pnl"] += pnl
-        
         # 清除持仓
         self.position = None
         self.state = self.STATE_IDLE
         
-        # 显示统计（获取最新余额）
+        # 显示统计
         self._print_stats(fetch_balance=True)
         print("=" * 50)
     
@@ -788,36 +773,6 @@ class RealtimeTrader:
                 return 0
         
         return position_amount
-    
-    def _wait_for_fill(self, order_id: str, default_price: float, timeout: float = 10) -> float:
-        """等待订单成交"""
-        start = time.time()
-        while time.time() - start < timeout:
-            try:
-                status = self.client.get_order(order_id)
-                if status:
-                    # 检查订单状态（LIVE=活跃, FILLED=成交, CANCELED=取消）
-                    order_status = status.get("status", "").upper()
-                    
-                    # 检查成交数量
-                    filled = (status.get("filled_size") or 
-                              status.get("size_filled") or 
-                              status.get("amount_filled") or
-                              status.get("sizeMatched") or
-                              0)
-                    
-                    # 成交条件：状态为FILLED 或 成交数量>0
-                    if order_status == "FILLED" or order_status == "MATCHED" or float(filled) > 0:
-                        price = status.get("price") or status.get("avg_price") or status.get("price_avg") or default_price
-                        if isinstance(price, str):
-                            price = float(price)
-                        if price > 1:
-                            price = price / 100.0
-                        return price
-            except:
-                pass
-            time.sleep(0.3)
-        return 0
     
     def stop(self) -> None:
         """停止交易"""
