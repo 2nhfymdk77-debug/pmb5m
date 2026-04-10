@@ -463,12 +463,7 @@ class RealtimeTrader:
                 self.current_event_id = market_id
                 self.market_id = market_id
                 
-                # 重置所有状态（新周期停止上一周期操作）
-                self.has_traded_in_event = False
-                self.position = None
-                self.state = self.STATE_IDLE
-                
-                # 获取token IDs
+                # 获取token IDs（先获取，用于检查代币余额）
                 token_ids = market.get("clobTokenIds", [])
                 if isinstance(token_ids, str):
                     import json
@@ -476,6 +471,42 @@ class RealtimeTrader:
                 if len(token_ids) >= 2:
                     self.yes_token_id = token_ids[0]
                     self.no_token_id = token_ids[1]
+                
+                # 检查是否还持有代币（防止新周期丢失持仓）
+                has_position = False
+                if self.yes_token_id:
+                    yes_balance = self.client.get_token_balance(self.yes_token_id)
+                    if yes_balance > 0:
+                        has_position = True
+                        # 修复持仓信息
+                        if not self.position:
+                            self.position = {
+                                "token": "YES",
+                                "token_id": self.yes_token_id,
+                                "size": yes_balance,
+                                "entry_price": 0.5,  # 未知入场价
+                            }
+                if not has_position and self.no_token_id:
+                    no_balance = self.client.get_token_balance(self.no_token_id)
+                    if no_balance > 0:
+                        has_position = True
+                        if not self.position:
+                            self.position = {
+                                "token": "NO",
+                                "token_id": self.no_token_id,
+                                "size": no_balance,
+                                "entry_price": 0.5,
+                            }
+                
+                # 只有在不持有代币时才完全重置
+                if not has_position:
+                    self.has_traded_in_event = False
+                    self.position = None
+                    self.state = self.STATE_IDLE
+                else:
+                    # 持有代币，进入卖出监控状态
+                    self.state = self.STATE_MONITORING_EXIT
+                    print(f"\n[警告] 检测到持仓 {self.position['token']} {self.position['size']:.2f}股")
                 
                 # 获取结束时间
                 end_ts = market.get("endDate")
