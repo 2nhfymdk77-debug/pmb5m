@@ -518,16 +518,30 @@ class RealtimeTrader:
                     self.no_token_id = token_ids[1]
                 
                 # 获取结束时间
-                end_ts = market.get("endDate")
-                if end_ts:
-                    self.event_end_time = float(end_ts) / 1000.0
+                end_ts = market.get("endDate") or market.get("end_date")
+                
+                # 计算下一个5分钟边界（备用）
+                next_minute = period_minute + 5
+                if next_minute >= 60:
+                    next_period = period_start.replace(minute=0) + timedelta(hours=1)
                 else:
-                    # 计算下一个5分钟边界
-                    next_minute = period_minute + 5
-                    if next_minute >= 60:
-                        next_period = period_start.replace(minute=0) + timedelta(hours=1)
-                    else:
-                        next_period = period_start.replace(minute=next_minute)
+                    next_period = period_start.replace(minute=next_minute)
+                
+                if end_ts:
+                    # endDate 可能是毫秒时间戳或 ISO 字符串
+                    if isinstance(end_ts, (int, float)):
+                        self.event_end_time = float(end_ts) / 1000.0
+                    elif isinstance(end_ts, str):
+                        # ISO 格式字符串，如 "2024-01-01T12:00:00Z"
+                        try:
+                            # 尝试解析 ISO 格式
+                            from datetime import datetime as dt
+                            dt_obj = dt.fromisoformat(end_ts.replace('Z', '+00:00'))
+                            self.event_end_time = dt_obj.timestamp()
+                        except:
+                            # 解析失败，使用备用计算
+                            self.event_end_time = next_period.timestamp()
+                else:
                     self.event_end_time = next_period.timestamp()
                 
                 remaining = max(0, int(self.event_end_time - time.time()))
