@@ -166,8 +166,8 @@ class RealtimeTrader:
         if self.has_traded_in_event:
             return
         
-        # 如果在买入冷却中，检查是否有延迟成交的持仓
-        if hasattr(self, '_buy_cooldown') and time.time() < self._buy_cooldown:
+        # 如果需要检查持仓（买入失败后可能延迟成交）
+        if hasattr(self, '_need_check_position') and self._need_check_position:
             if self.yes_token_id:
                 yes_balance = self.client.get_token_balance(self.yes_token_id)
                 if yes_balance > 0:
@@ -179,6 +179,7 @@ class RealtimeTrader:
                     }
                     self.has_traded_in_event = True
                     self.state = self.STATE_HOLDING
+                    self._need_check_position = False
                     print(f"\n[发现] 已有 YES 持仓 {yes_balance:.2f}股")
                     return
             
@@ -193,8 +194,12 @@ class RealtimeTrader:
                     }
                     self.has_traded_in_event = True
                     self.state = self.STATE_HOLDING
+                    self._need_check_position = False
                     print(f"\n[发现] 已有 NO 持仓 {no_balance:.2f}股")
                     return
+        
+        # 检查是否在买入冷却中
+        if hasattr(self, '_buy_cooldown') and time.time() < self._buy_cooldown:
             return  # 冷却中，继续等待
         
         # 剩余时间太少，跳过（等待新周期）
@@ -334,24 +339,23 @@ class RealtimeTrader:
                     # 成功买入后标记已交易，防止同一周期再次买入
                     self.has_traded_in_event = True
                     self.state = self.STATE_HOLDING
+                    self._need_check_position = False
                     print(f"[确认] 买入成功 {actual_balance:.2f}股")
                     self._print_stats()
                 else:
-                    # 买入未成交，设置冷却时间，稍后重试
+                    # 买入未成交，设置冷却时间，开启持仓检查
                     print("[等待] 买入未立即成交，继续监控...")
                     self._buy_cooldown = time.time() + 5  # 5秒冷却
-                    # 保持 IDLE 状态，不标记 has_traded_in_event
+                    self._need_check_position = True  # 开启持仓检查
             else:
                 # 下单失败，设置冷却时间，稍后重试
                 error = order.get("errorMsg", "Unknown") if order else "No response"
                 print(f"[失败] {error}，继续监控...")
                 self._buy_cooldown = time.time() + 5  # 5秒冷却
-                # 保持 IDLE 状态
         except Exception as e:
             # 异常，设置冷却时间，稍后重试
             print(f"[错误] {e}，继续监控...")
             self._buy_cooldown = time.time() + 5  # 5秒冷却
-            self.state = self.STATE_IDLE
     
     def _execute_sell(self, reason: str, price: float) -> None:
         """执行卖出"""
