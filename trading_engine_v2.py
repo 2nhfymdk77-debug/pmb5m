@@ -21,8 +21,7 @@ class RealtimeTrader:
     """实时交易引擎 - 简化版"""
     
     # 状态常量
-    STATE_IDLE = "IDLE"                    # 空闲，等待监控
-    STATE_MONITORING_ENTRY = "MONITORING"  # 监控买入价格
+    STATE_IDLE = "IDLE"                    # 空闲，等待买入机会
     STATE_HOLDING = "HOLDING"              # 持仓中
     STATE_MONITORING_EXIT = "EXITING"      # 监控卖出价格
     
@@ -106,16 +105,17 @@ class RealtimeTrader:
     
     def _main_loop(self) -> None:
         """主循环 - 根据状态执行不同逻辑"""
-        # 1. 检查/更新市场
-        if not self._check_market():
-            print(f"\r{' '*60}\r[等待] 获取市场中...", end="", flush=True)
-            time.sleep(1)
-            return
+        # 1. 检查是否需要更新市场（只在周期结束或首次运行时）
+        if self.current_event_id is None or time.time() >= self.event_end_time:
+            if not self._check_market():
+                print(f"\r{' '*60}\r[等待] 获取市场中...", end="", flush=True)
+                time.sleep(1)
+                return
 
         # 2. 获取实时价格
         prices = self._get_prices_fast()
         if not prices:
-            time.sleep(0.1)
+            time.sleep(0.05)
             return
 
         yes_price = prices.get("YES", 0.5)
@@ -128,8 +128,8 @@ class RealtimeTrader:
             time_str = datetime.now().strftime("%H:%M:%S")
             if self.state == self.STATE_IDLE:
                 status = "等待机会" if not self.has_traded_in_event else "已交易"
-            elif self.state == self.STATE_MONITORING_ENTRY:
-                status = "监控买入"
+            elif self.state == self.STATE_HOLDING:
+                status = f"持仓 {self.position['token']}" if self.position else "确认中"
             elif self.state == self.STATE_MONITORING_EXIT:
                 status = f"持仓 {self.position['token']}" if self.position else "卖出中"
             else:
@@ -142,18 +142,19 @@ class RealtimeTrader:
         # 4. 根据状态执行
         if self.state == self.STATE_IDLE:
             self._handle_idle(yes_price, no_price)
-        elif self.state == self.STATE_MONITORING_ENTRY:
-            self._handle_monitoring_entry(yes_price, no_price)
         elif self.state == self.STATE_HOLDING:
             self._handle_holding(yes_price, no_price)
         elif self.state == self.STATE_MONITORING_EXIT:
             self._handle_monitoring_exit(yes_price, no_price)
+        
+        # 最小间隔，避免 CPU 占用过高
+        time.sleep(0.05)
     
     # ==================== 状态处理 ====================
     
     def _handle_idle(self, yes_price: float, no_price: float) -> None:
-        """空闲状态 - 检查是否可以开始监控"""
-        # 如果当前事件已成功买入，跳过
+        """空闲状态 - 检查是否可以买入"""
+        # 如果当前事件已交易，跳过
         if self.has_traded_in_event:
             return
         
@@ -162,39 +163,16 @@ class RealtimeTrader:
         if remaining < 30:
             return
         
-        # 检查价格是否达到买入条件
         entry_price = self.config.entry_price / 100.0
         
-        # 价格达到买入价且不极端（<90%）
-        can_monitor_yes = yes_price >= entry_price and yes_price < 0.90
-        can_monitor_no = no_price >= entry_price and no_price < 0.90
-        
-        if can_monitor_yes or can_monitor_no:
-            self.state = self.STATE_MONITORING_ENTRY
-    
-    def _handle_monitoring_entry(self, yes_price: float, no_price: float) -> None:
-        """监控买入价格 - 等待达到目标价"""
-        # 剩余时间太少，回到空闲等待新周期
-        remaining = self.event_end_time - time.time()
-        if remaining < 30:
-            self.state = self.STATE_IDLE
-            return
-        
-        entry_price = self.config.entry_price / 100.0
-        
-        # 检查是否可以买入（价格达到买入价且不极端）
+        # 检查价格是否达到买入条件（达到买入价且不极端）
         can_buy_yes = yes_price >= entry_price and yes_price < 0.90
         can_buy_no = no_price >= entry_price and no_price < 0.90
         
-        # 两边价格都太极端，无法买入
         if not can_buy_yes and not can_buy_no:
-            # 价格极端（>=90%），回到空闲
-            if yes_price >= 0.90 or no_price >= 0.90:
-                print(f"\n[跳过] 价格极端 YES={int(yes_price*100)}% NO={int(no_price*100)}%")
-            self.state = self.STATE_IDLE
-            return
+            return  # 价格不满足条件，继续等待
         
-        # 选择买入哪一方
+        # 选择买入哪一方（选择价格更高的一方）
         if can_buy_yes and can_buy_no:
             token = "YES" if yes_price >= no_price else "NO"
             price = max(yes_price, no_price)
@@ -204,6 +182,8 @@ class RealtimeTrader:
             token, price = "NO", no_price
         
         # 执行买入
+        print(f"\n{'='*50}")
+        print(f"[触发] {token} 达到买入价 {int(price*100)}%")
         self._execute_buy(token, price)
     
     def _handle_holding(self, yes_price: float, no_price: float) -> None:
@@ -299,18 +279,21 @@ class RealtimeTrader:
                     print(f"[确认] 买入成功 {actual_balance:.2f}股")
                     self._print_stats()
                 else:
-                    # 买入失败，可以重试
-                    print("[失败] 买入后余额为0，等待重试...")
-                    self.state = self.STATE_MONITORING_ENTRY
+                    # 买入失败，标记已交易避免重复尝试
+                    print("[失败] 买入后余额为0，跳过本周期")
+                    self.has_traded_in_event = True
+                    self.state = self.STATE_IDLE
             else:
-                # 买入失败，可以重试
+                # 买入失败，标记已交易避免重复尝试
                 error = order.get("errorMsg", "Unknown") if order else "No response"
-                print(f"[失败] {error}，等待重试...")
-                self.state = self.STATE_MONITORING_ENTRY
+                print(f"[失败] {error}，跳过本周期")
+                self.has_traded_in_event = True
+                self.state = self.STATE_IDLE
         except Exception as e:
-            # 异常，可以重试
-            print(f"[错误] {e}，等待重试...")
-            self.state = self.STATE_MONITORING_ENTRY
+            # 异常，标记已交易避免重复尝试
+            print(f"[错误] {e}，跳过本周期")
+            self.has_traded_in_event = True
+            self.state = self.STATE_IDLE
     
     def _execute_sell(self, reason: str, price: float) -> None:
         """执行卖出"""
@@ -577,7 +560,7 @@ class RealtimeTrader:
                 """获取订单簿并返回排序后的 asks/bids"""
                 try:
                     url = f"https://clob.polymarket.com/book?token_id={token_id}"
-                    resp = requests.get(url, timeout=5)
+                    resp = requests.get(url, timeout=2)  # 减少超时时间
                     if resp.status_code == 200:
                         book = resp.json()
                         asks = book.get("asks", [])
@@ -599,8 +582,8 @@ class RealtimeTrader:
                 future_yes = executor.submit(fetch_orderbook, self.yes_token_id)
                 future_no = executor.submit(fetch_orderbook, self.no_token_id)
                 
-                yes_book = future_yes.result(timeout=5)
-                no_book = future_no.result(timeout=5)
+                yes_book = future_yes.result(timeout=3)  # 减少超时时间
+                no_book = future_no.result(timeout=3)
             
             # 计算价格
             def calc_price(book: dict) -> float:
