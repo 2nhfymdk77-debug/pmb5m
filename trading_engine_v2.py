@@ -518,9 +518,12 @@ class RealtimeTrader:
                 if isinstance(token_ids, str):
                     import json
                     token_ids = json.loads(token_ids)
+                
                 if len(token_ids) >= 2:
                     self.yes_token_id = token_ids[0]
                     self.no_token_id = token_ids[1]
+                else:
+                    print(f"[警告] token_ids 数量不足: {len(token_ids)}")
                 
                 # 获取结束时间
                 end_ts = market.get("endDate") or market.get("end_date")
@@ -563,66 +566,65 @@ class RealtimeTrader:
             return False
     
     def _get_prices_fast(self) -> Optional[Dict[str, float]]:
-        """快速获取价格 - 直接调用 API，不使用缓存"""
-        try:
-            # 优先使用真实的市场 ID
-            market_id_to_use = self.real_market_id or self.market_id
-            
-            # 直接调用 Gamma API 获取价格（绕过缓存）
-            url = f"{self.client.GAMMA_API_BASE}/markets/{market_id_to_use}"
-            resp = requests.get(url, timeout=3)
-            
-            if resp.status_code != 200:
-                # 尝试使用 condition_id 查询
-                url = f"{self.client.GAMMA_API_BASE}/markets?condition_id={self.market_id}"
-                resp = requests.get(url, timeout=3)
-            
-            if resp.status_code == 200:
-                data = resp.json()
-                # 可能返回列表
-                if isinstance(data, list) and len(data) > 0:
-                    market = data[0]
-                elif isinstance(data, dict):
-                    market = data
-                else:
-                    return None
-                
-                # 调试：打印返回的数据结构
-                print(f"\n[DEBUG] outcomePrices: {market.get('outcomePrices')}")
-                print(f"[DEBUG] bestBid: {market.get('bestBid')}, bestAsk: {market.get('bestAsk')}")
-                
-                # 尝试多种价格字段
-                outcome_prices = market.get("outcomePrices", [])
-                best_bid = market.get("bestBid")
-                best_ask = market.get("bestAsk")
-                
-                # 方法1: outcomePrices
-                if isinstance(outcome_prices, str):
-                    import json
-                    try:
-                        outcome_prices = json.loads(outcome_prices)
-                    except:
-                        outcome_prices = []
-                
-                if isinstance(outcome_prices, list) and len(outcome_prices) >= 2:
-                    yes_str = outcome_prices[0]
-                    no_str = outcome_prices[1]
-                    
-                    yes_price = float(yes_str) / 100.0 if yes_str else 0.0
-                    no_price = float(no_str) / 100.0 if no_str else 0.0
-                    
-                    if yes_price > 0 and no_price > 0:
-                        return {"YES": yes_price, "NO": no_price}
-                
-                # 方法2: bestBid/bestAsk
-                if best_bid is not None and best_ask is not None:
-                    yes_price = float(best_ask) / 100.0 if best_ask else 0.5
-                    no_price = 1.0 - yes_price
-                    return {"YES": yes_price, "NO": no_price}
-            
+        """快速获取价格 - 使用 CLOB API 获取实时订单簿价格"""
+        if not self.yes_token_id or not self.no_token_id:
             return None
+        
+        try:
+            from concurrent.futures import ThreadPoolExecutor
+            
+            def fetch_price(token_id: str) -> float:
+                try:
+                    url = f"https://clob.polymarket.com/book?token_id={token_id}"
+                    resp = requests.get(url, timeout=3)
+                    if resp.status_code == 200:
+                        book = resp.json()
+                        asks = book.get("asks", [])
+                        bids = book.get("bids", [])
+                        
+                        if asks and bids:
+                            best_ask = float(asks[0].get("price", 0))
+                            best_bid = float(bids[0].get("price", 0))
+                            if best_ask > 0 and best_bid > 0:
+                                price = (best_ask + best_bid) / 2
+                            else:
+                                price = best_ask or best_bid or 0
+                        elif asks:
+                            price = float(asks[0].get("price", 0))
+                        elif bids:
+                            price = float(bids[0].get("price", 0))
+                        else:
+                            return 0
+                        
+                        # 转换为小数格式
+                        if price > 1:
+                            price = price / 100.0
+                        return price
+                except:
+                    pass
+                return 0
+            
+            # 并行获取 YES 和 NO 价格
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                future_yes = executor.submit(fetch_price, self.yes_token_id)
+                future_no = executor.submit(fetch_price, self.no_token_id)
+                
+                yes_price = future_yes.result(timeout=5)
+                no_price = future_no.result(timeout=5)
+            
+            # 如果获取失败，返回 None
+            if yes_price <= 0 and no_price <= 0:
+                return None
+            
+            # 如果只有一边有价格，计算另一边
+            if yes_price <= 0:
+                yes_price = 1.0 - no_price
+            if no_price <= 0:
+                no_price = 1.0 - yes_price
+            
+            return {"YES": yes_price, "NO": no_price}
+            
         except Exception as e:
-            print(f"\n[DEBUG] 价格获取错误: {e}")
             return None
     
     def _get_event_result(self) -> Optional[str]:
