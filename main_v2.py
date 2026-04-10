@@ -15,7 +15,7 @@ def main():
     print("=" * 50)
     
     # 加载配置
-    config = TradingConfig()
+    config = TradingConfig.load()
     
     # 创建交易引擎
     try:

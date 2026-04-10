@@ -107,6 +107,7 @@ class RealtimeTrader:
         """主循环 - 根据状态执行不同逻辑"""
         # 1. 检查/更新市场
         if not self._check_market():
+            print(f"\r[等待] 获取市场中...    ", end="", flush=True)
             time.sleep(1)
             return
         
@@ -119,7 +120,23 @@ class RealtimeTrader:
         yes_price = prices.get("YES", 0.5)
         no_price = prices.get("NO", 0.5)
         
-        # 3. 根据状态执行
+        # 3. 显示实时状态（每秒一次）
+        now = time.time()
+        remaining = max(0, int(self.event_end_time - now))
+        if now - self.last_price_check >= 1.0:
+            time_str = datetime.now().strftime("%H:%M:%S")
+            if self.state == self.STATE_IDLE:
+                status = "等待机会" if not self.has_traded_in_event else "已交易"
+            elif self.state == self.STATE_MONITORING_ENTRY:
+                status = "监控买入"
+            elif self.state == self.STATE_MONITORING_EXIT:
+                status = f"持仓 {self.position['token']}" if self.position else "卖出中"
+            else:
+                status = self.state
+            print(f"\r[{time_str}] {status} | YES={int(yes_price*100)}% NO={int(no_price*100)}% | 剩余{remaining}s    ", end="", flush=True)
+            self.last_price_check = now
+        
+        # 4. 根据状态执行
         if self.state == self.STATE_IDLE:
             self._handle_idle(yes_price, no_price)
         elif self.state == self.STATE_MONITORING_ENTRY:
@@ -151,7 +168,6 @@ class RealtimeTrader:
         
         if can_monitor_yes or can_monitor_no:
             self.state = self.STATE_MONITORING_ENTRY
-            self._print_status("监控买入", yes_price, no_price)
     
     def _handle_monitoring_entry(self, yes_price: float, no_price: float) -> None:
         """监控买入价格 - 等待达到目标价"""
@@ -162,12 +178,6 @@ class RealtimeTrader:
             return
         
         entry_price = self.config.entry_price / 100.0
-        
-        # 输出状态（每秒一次）
-        now = time.time()
-        if now - self.last_price_check >= 1.0:
-            self._print_status("等待买入", yes_price, no_price)
-            self.last_price_check = now
         
         # 检查是否可以买入（价格达到买入价且不极端）
         can_buy_yes = yes_price >= entry_price and yes_price < 0.90
@@ -205,13 +215,6 @@ class RealtimeTrader:
         
         token = self.position["token"]
         current_price = yes_price if token == "YES" else no_price
-        
-        # 输出状态（每秒一次）
-        now = time.time()
-        if now - self.last_price_check >= 1.0:
-            remaining = max(0, int(self.event_end_time - now))
-            print(f"\r[持仓] {token} @ {int(current_price*100)}% | 剩余{remaining}s    ", end="", flush=True)
-            self.last_price_check = now
         
         stop_loss = self.config.stop_loss / 100.0
         take_profit = self.config.take_profit / 100.0
@@ -619,12 +622,6 @@ class RealtimeTrader:
                 pass
             time.sleep(0.3)
         return 0
-    
-    def _print_status(self, action: str, yes: float, no: float) -> None:
-        """打印状态"""
-        now = datetime.now().strftime("%H:%M:%S")
-        remaining = max(0, int(self.event_end_time - time.time()))
-        print(f"\r[{now}] {action} | YES={int(yes*100)}% NO={int(no*100)}% | 剩余{remaining}s    ", end="", flush=True)
     
     def stop(self) -> None:
         """停止交易"""
