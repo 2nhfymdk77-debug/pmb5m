@@ -620,6 +620,7 @@ class RealtimeTrader:
         pnl_display = f"+${pnl:.2f}" if pnl >= 0 else f"-${abs(pnl):.2f}"
         
         print(f"[统计] 初始: ${self.initial_balance:.2f} | 当前: ${current_balance:.2f} | 盈亏: {pnl_display}")
+        print()  # 添加空行，确保后续 \r 显示在新行
     
     # ==================== 辅助方法 ====================
     
@@ -856,7 +857,13 @@ class RealtimeTrader:
         elif no_price > 0:
             yes_price = 1.0 - no_price
         else:
-            return  # 刷新失败，保留旧缓存
+            # 刷新失败，设置默认值避免无限等待
+            if self._price_cache is None:
+                # 首次获取失败，使用默认值
+                yes_price = 0.5
+                no_price = 0.5
+            else:
+                return  # 非首次失败，保留旧缓存
         
         # 更新缓存
         now = time.time()
