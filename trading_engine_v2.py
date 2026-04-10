@@ -166,6 +166,37 @@ class RealtimeTrader:
         if self.has_traded_in_event:
             return
         
+        # 如果在买入冷却中，检查是否有延迟成交的持仓
+        if hasattr(self, '_buy_cooldown') and time.time() < self._buy_cooldown:
+            if self.yes_token_id:
+                yes_balance = self.client.get_token_balance(self.yes_token_id)
+                if yes_balance > 0:
+                    self.position = {
+                        "token": "YES",
+                        "token_id": self.yes_token_id,
+                        "size": yes_balance,
+                        "entry_price": self.config.entry_price / 100.0,
+                    }
+                    self.has_traded_in_event = True
+                    self.state = self.STATE_HOLDING
+                    print(f"\n[发现] 已有 YES 持仓 {yes_balance:.2f}股")
+                    return
+            
+            if self.no_token_id:
+                no_balance = self.client.get_token_balance(self.no_token_id)
+                if no_balance > 0:
+                    self.position = {
+                        "token": "NO",
+                        "token_id": self.no_token_id,
+                        "size": no_balance,
+                        "entry_price": self.config.entry_price / 100.0,
+                    }
+                    self.has_traded_in_event = True
+                    self.state = self.STATE_HOLDING
+                    print(f"\n[发现] 已有 NO 持仓 {no_balance:.2f}股")
+                    return
+            return  # 冷却中，继续等待
+        
         # 剩余时间太少，跳过（等待新周期）
         remaining = self.event_end_time - time.time()
         if remaining < 30:
@@ -246,6 +277,10 @@ class RealtimeTrader:
         """执行买入"""
         token_id = self.yes_token_id if token == "YES" else self.no_token_id
         
+        # 检查是否在冷却中（防止频繁重试）
+        if hasattr(self, '_buy_cooldown') and time.time() < self._buy_cooldown:
+            return
+        
         # 先查询最新余额
         try:
             latest_balance = self.client.get_balance()
@@ -259,7 +294,6 @@ class RealtimeTrader:
         if position_amount <= 0:
             # 余额不足，跳过本次买入
             print(f"\n[跳过] 余额 ${self.balance:.2f} 不足以开仓")
-            self.state = self.STATE_IDLE
             return
         
         shares = math.ceil(position_amount / price)
@@ -282,9 +316,9 @@ class RealtimeTrader:
             )
             
             if order and order.get("success") != False:
-                # 等待余额更新（循环检查，最多5秒）
+                # 等待余额更新（循环检查，最多10秒）
                 actual_balance = 0.0
-                for _ in range(10):
+                for _ in range(20):
                     time.sleep(0.5)
                     actual_balance = self.client.get_token_balance(token_id)
                     if actual_balance > 0:
@@ -303,20 +337,20 @@ class RealtimeTrader:
                     print(f"[确认] 买入成功 {actual_balance:.2f}股")
                     self._print_stats()
                 else:
-                    # 买入失败，标记已交易避免重复尝试
-                    print("[失败] 买入后余额为0，跳过本周期")
-                    self.has_traded_in_event = True
-                    self.state = self.STATE_IDLE
+                    # 买入未成交，设置冷却时间，稍后重试
+                    print("[等待] 买入未立即成交，继续监控...")
+                    self._buy_cooldown = time.time() + 5  # 5秒冷却
+                    # 保持 IDLE 状态，不标记 has_traded_in_event
             else:
-                # 买入失败，标记已交易避免重复尝试
+                # 下单失败，设置冷却时间，稍后重试
                 error = order.get("errorMsg", "Unknown") if order else "No response"
-                print(f"[失败] {error}，跳过本周期")
-                self.has_traded_in_event = True
-                self.state = self.STATE_IDLE
+                print(f"[失败] {error}，继续监控...")
+                self._buy_cooldown = time.time() + 5  # 5秒冷却
+                # 保持 IDLE 状态
         except Exception as e:
-            # 异常，标记已交易避免重复尝试
-            print(f"[错误] {e}，跳过本周期")
-            self.has_traded_in_event = True
+            # 异常，设置冷却时间，稍后重试
+            print(f"[错误] {e}，继续监控...")
+            self._buy_cooldown = time.time() + 5  # 5秒冷却
             self.state = self.STATE_IDLE
     
     def _execute_sell(self, reason: str, price: float) -> None:
