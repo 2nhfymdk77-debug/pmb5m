@@ -326,11 +326,6 @@ class RealtimeTrader:
         if actual_balance > 0:
             size = actual_balance
         
-        # 检查最小股数限制
-        if size < 5:
-            print(f"\n[跳过卖出] 持仓 {size:.2f}股 < 最小5股，等待事件结算")
-            return
-        
         # 卖出价格
         sell_price = max(1, int(price * 100) - 2)
         
