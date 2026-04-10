@@ -359,6 +359,15 @@ class RealtimeTrader:
             self._buy_cooldown = time.time() + 2
             return
         
+        # ⚠️ 价格滑动检查：确保卖一价仍在合理范围内
+        entry_price = self.config.entry_price / 100.0
+        if best_ask < entry_price:
+            print(f"\n[跳过] {token} 卖一价 {int(best_ask*100)}% < 买入价 {int(entry_price*100)}%")
+            return
+        if best_ask >= 0.90:
+            print(f"\n[跳过] {token} 卖一价 {int(best_ask*100)}% >= 90%，价格过高")
+            return
+        
         # 先查询最新余额
         try:
             latest_balance = self.client.get_balance()
