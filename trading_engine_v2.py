@@ -197,7 +197,23 @@ class RealtimeTrader:
             return
         
         token = self.position["token"]
+        token_id = self.position["token_id"]
         current_price = yes_price if token == "YES" else no_price
+        
+        # 定期检查实际持仓（每10次循环检查一次）
+        if not hasattr(self, '_balance_check_counter'):
+            self._balance_check_counter = 0
+        self._balance_check_counter += 1
+        
+        if self._balance_check_counter >= 10:
+            self._balance_check_counter = 0
+            actual_balance = self.client.get_token_balance(token_id)
+            if actual_balance <= 0:
+                # 持仓已清空（可能被外部卖出），清除状态
+                print(f"\n[检测] {token} 持仓已清空")
+                self.position = None
+                self.state = self.STATE_IDLE
+                return
         
         stop_loss = self.config.stop_loss / 100.0
         take_profit = self.config.take_profit / 100.0
@@ -310,6 +326,11 @@ class RealtimeTrader:
         if actual_balance > 0:
             size = actual_balance
         
+        # 检查最小股数限制
+        if size < 5:
+            print(f"\n[跳过卖出] 持仓 {size:.2f}股 < 最小5股，等待事件结算")
+            return
+        
         # 卖出价格
         sell_price = max(1, int(price * 100) - 2)
         
@@ -331,7 +352,22 @@ class RealtimeTrader:
                 actual_price = self._wait_for_fill(order_id, sell_price / 100.0)
                 
                 if actual_price > 0:
-                    self._close_position(entry_price, actual_price, size, reason)
+                    # 卖出后再次查询持仓验证
+                    time.sleep(0.5)
+                    remaining_balance = self.client.get_token_balance(token_id)
+                    
+                    if remaining_balance <= 0:
+                        # 持仓已清空，关闭持仓
+                        self._close_position(entry_price, actual_price, size, reason)
+                    else:
+                        # 还有剩余持仓，更新持仓大小继续监控
+                        print(f"[部分成交] 剩余 {remaining_balance:.2f}股")
+                        self.position["size"] = remaining_balance
+                        # 取消可能残留的订单
+                        try:
+                            self.client.cancel_order(order_id)
+                        except:
+                            pass
                 else:
                     # 卖出失败，取消订单并继续监控
                     print("[失败] 卖出未成交，继续监控...")
