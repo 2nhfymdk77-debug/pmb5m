@@ -281,9 +281,28 @@ class RealtimeTrader:
     
     # ==================== 交易执行 ====================
     
-    def _get_best_ask(self, token: str) -> Optional[float]:
+    def _get_best_ask(self, token: str, use_cache: bool = True) -> Optional[float]:
         """获取卖一价格（用于买入）"""
         token_id = self.yes_token_id if token == "YES" else self.no_token_id
+        
+        # 如果强制刷新或不使用缓存，直接查询
+        if not use_cache:
+            try:
+                url = f"https://clob.polymarket.com/book?token_id={token_id}"
+                resp = requests.get(url, timeout=1.0)
+                if resp.status_code == 200:
+                    book = resp.json()
+                    asks = book.get("asks", [])
+                    if asks:
+                        # 排序获取最低卖价
+                        asks = sorted(asks, key=lambda x: float(x.get("price", "999")))
+                        best_ask = float(asks[0].get("price", 0))
+                        if best_ask > 1:
+                            best_ask = best_ask / 100.0
+                        return best_ask
+            except:
+                pass
+            return None
         
         # 优先使用缓存的订单簿
         if hasattr(self, '_orderbook_cache'):
@@ -313,9 +332,28 @@ class RealtimeTrader:
             pass
         return None
     
-    def _get_best_bid(self, token: str) -> Optional[float]:
+    def _get_best_bid(self, token: str, use_cache: bool = True) -> Optional[float]:
         """获取买一价格（用于卖出）"""
         token_id = self.yes_token_id if token == "YES" else self.no_token_id
+        
+        # 如果强制刷新或不使用缓存，直接查询
+        if not use_cache:
+            try:
+                url = f"https://clob.polymarket.com/book?token_id={token_id}"
+                resp = requests.get(url, timeout=1.0)
+                if resp.status_code == 200:
+                    book = resp.json()
+                    bids = book.get("bids", [])
+                    if bids:
+                        # 排序获取最高买价
+                        bids = sorted(bids, key=lambda x: float(x.get("price", "0")), reverse=True)
+                        best_bid = float(bids[0].get("price", 0))
+                        if best_bid > 1:
+                            best_bid = best_bid / 100.0
+                        return best_bid
+            except:
+                pass
+            return None
         
         # 优先使用缓存的订单簿
         if hasattr(self, '_orderbook_cache'):
@@ -353,8 +391,8 @@ class RealtimeTrader:
         if hasattr(self, '_buy_cooldown') and time.time() < self._buy_cooldown:
             return
         
-        # 获取卖一价格（使用缓存优化）
-        best_ask = self._get_best_ask(token)
+        # 获取最新卖一价格（强制刷新，不使用缓存）
+        best_ask = self._get_best_ask(token, use_cache=False)
         if best_ask is None:
             self._buy_cooldown = time.time() + 2
             return
@@ -454,8 +492,8 @@ class RealtimeTrader:
         
         size = actual_balance
         
-        # 获取买一价格（使用缓存优化）
-        best_bid = self._get_best_bid(token)
+        # 获取最新买一价格（强制刷新，不使用缓存）
+        best_bid = self._get_best_bid(token, use_cache=False)
         if best_bid is None:
             self._sell_cooldown = time.time() + 2
             return
