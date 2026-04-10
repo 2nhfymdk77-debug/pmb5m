@@ -370,16 +370,34 @@ class RealtimeTrader:
         
         token = self.position["token"]
         token_id = self.position["token_id"]
-        size = self.position["size"]
         entry_price = self.position["entry_price"]
         
         # 查询实际余额
         actual_balance = self.client.get_token_balance(token_id)
-        if actual_balance > 0:
-            size = actual_balance
+        
+        # 如果实际余额为 0，清除持仓状态
+        if actual_balance <= 0:
+            print(f"\n[检测] {token} 持仓已清空")
+            self.position = None
+            self.state = self.STATE_IDLE
+            return
+        
+        size = actual_balance
         
         # 卖出价格
         sell_price = max(1, int(price * 100) - 2)
+        
+        # 检查订单金额是否满足最小要求（$1）
+        order_amount = size * sell_price / 100.0
+        if order_amount < 1.0:
+            print(f"\n[跳过] 订单金额 ${order_amount:.2f} < 最小 $1.00，等待事件结算")
+            # 设置冷却，避免频繁打印
+            self._sell_cooldown = time.time() + 10
+            return
+        
+        # 检查是否在卖出冷却中
+        if hasattr(self, '_sell_cooldown') and time.time() < self._sell_cooldown:
+            return
         
         print(f"\n{'='*50}")
         print(f"[{reason}] 卖出 {token} {size:.2f}股 @ {sell_price}%")
@@ -417,22 +435,22 @@ class RealtimeTrader:
                     except:
                         pass
                 else:
-                    # 卖出失败，取消订单并继续监控
+                    # 卖出失败，取消订单，设置冷却
                     print("[失败] 卖出未成交，继续监控...")
                     try:
                         self.client.cancel_order(order_id)
                     except:
                         pass
-                    # 保持在 MONITORING_EXIT 状态继续尝试
+                    self._sell_cooldown = time.time() + 5  # 5秒冷却
             else:
-                # 卖出失败，继续监控
+                # 卖出失败，设置冷却
                 error = order.get("errorMsg", "Unknown") if order else "No response"
                 print(f"[失败] {error}，继续监控...")
-                # 保持在 MONITORING_EXIT 状态
+                self._sell_cooldown = time.time() + 5  # 5秒冷却
         except Exception as e:
-            # 异常，继续监控
+            # 异常，设置冷却
             print(f"[错误] {e}，继续监控...")
-            # 保持在 MONITORING_EXIT 状态
+            self._sell_cooldown = time.time() + 5  # 5秒冷却
     
     def _handle_event_end(self) -> None:
         """处理事件结束"""
@@ -442,11 +460,17 @@ class RealtimeTrader:
         
         token = self.position["token"]
         token_id = self.position["token_id"]
-        size = self.position["size"]
         entry_price = self.position["entry_price"]
         
         # 查询实际余额
         actual_balance = self.client.get_token_balance(token_id)
+        
+        # 如果实际余额为 0，清除持仓状态
+        if actual_balance <= 0:
+            print(f"\n[检测] {token} 持仓已清空")
+            self.position = None
+            self.state = self.STATE_IDLE
+            return
         
         print(f"\n{'='*50}")
         print(f"[事件结束] 等待结算...")
