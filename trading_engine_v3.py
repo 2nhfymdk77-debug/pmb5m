@@ -437,8 +437,7 @@ class RealtimeTrader:
             shares = 5  # 最小5股
         
         buy_price = int(best_ask * 100)
-        print(f"\n{'='*50}")
-        print(f"[买入] {token} {shares}股 @ {buy_price}% (卖一价)")
+        print(f"\n[买入] {token} {shares}股 @ {buy_price}% (卖一价)")
         
         try:
             # 使用FOK订单立即成交
@@ -744,8 +743,9 @@ class RealtimeTrader:
                 else:
                     time_left = f"{remaining}秒"
                 
-                # 新周期只打印一行，不影响后续 \r 显示
-                print(f"\r{' '*60}\r[新周期] 剩余 {time_left}", flush=True)
+                # 新周期打印分割线和信息
+                print(f"\n{'='*50}")
+                print(f"[新周期] 剩余 {time_left}")
                 self._print_stats()
             
             return True
