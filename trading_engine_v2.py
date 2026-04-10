@@ -107,19 +107,19 @@ class RealtimeTrader:
         """主循环 - 根据状态执行不同逻辑"""
         # 1. 检查/更新市场
         if not self._check_market():
-            print(f"\r[等待] 获取市场中...    ", end="", flush=True)
+            print(f"\r{' '*60}\r[等待] 获取市场中...", end="", flush=True)
             time.sleep(1)
             return
-        
+
         # 2. 获取实时价格
         prices = self._get_prices_fast()
         if not prices:
             time.sleep(0.1)
             return
-        
+
         yes_price = prices.get("YES", 0.5)
         no_price = prices.get("NO", 0.5)
-        
+
         # 3. 显示实时状态（每秒一次）
         now = time.time()
         remaining = max(0, int(self.event_end_time - now))
@@ -133,9 +133,11 @@ class RealtimeTrader:
                 status = f"持仓 {self.position['token']}" if self.position else "卖出中"
             else:
                 status = self.state
-            print(f"\r[{time_str}] {status} | YES={int(yes_price*100)}% NO={int(no_price*100)}% | 剩余{remaining}s    ", end="", flush=True)
+            # 清除整行后打印新内容（避免残留字符）
+            line = f"[{time_str}] {status} | YES={int(yes_price*100)}% NO={int(no_price*100)}% | 剩余{remaining}s"
+            print(f"\r{' '*60}\r{line}", end="", flush=True)
             self.last_price_check = now
-        
+
         # 4. 根据状态执行
         if self.state == self.STATE_IDLE:
             self._handle_idle(yes_price, no_price)
