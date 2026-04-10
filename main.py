@@ -72,11 +72,12 @@ def print_menu():
     print("\n" + "=" * 60)
     print("交互菜单:")
     print("=" * 60)
-    print("  1. 开始交易")
-    print("  2. 修改参数")
-    print("  3. 配置API凭证")
-    print("  4. 查看交易历史")
-    print("  5. 退出")
+    print("  1. 开始交易 (V1 - 周期模式)")
+    print("  2. 开始交易 (V2 - 实时监控)")
+    print("  3. 修改参数")
+    print("  4. 配置API凭证")
+    print("  5. 查看交易历史")
+    print("  6. 退出")
     print("=" * 60)
 
 
@@ -99,7 +100,32 @@ def modify_parameters(config: TradingConfig) -> None:
             trade_cycle_minutes=trade_cycle,
         )
 
-        print("\n[ 参数已更新!")
+        print("\n[OK] 参数已更新!")
+
+    except ValueError as e:
+        print(f"\n[X] 输入错误: {e}")
+
+
+def modify_parameters(config: TradingConfig) -> None:
+    """修改交易参数"""
+    print("\n" + "=" * 60)
+    print("修改交易参数:")
+    print("=" * 60)
+
+    try:
+        entry_price = float(input(f"  开仓价格 (当前: {config.entry_price}): ") or config.entry_price)
+        stop_loss = float(input(f"  止损价格 (当前: {config.stop_loss}): ") or config.stop_loss)
+        take_profit = float(input(f"  止盈价格 (当前: {config.take_profit}): ") or config.take_profit)
+        trade_cycle = int(input(f"  交易周期分钟 (当前: {config.trade_cycle_minutes}): ") or config.trade_cycle_minutes)
+
+        config.update(
+            entry_price=entry_price,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            trade_cycle_minutes=trade_cycle,
+        )
+
+        print("\n[OK] 参数已更新!")
 
     except ValueError as e:
         print(f"\n[X] 输入错误: {e}")
@@ -203,28 +229,35 @@ def run_interactive_mode(config: TradingConfig) -> None:
         print_config(config)
         print_menu()
 
-        choice = input("\n请选择操作 (1-5): ").strip()
+        choice = input("\n请选择操作 (1-6): ").strip()
 
         if choice == "1":
-            # 开始交易
+            # 开始交易 V1
             engine = TradingEngine(config)
             engine.start()
             break
 
         elif choice == "2":
+            # 开始交易 V2 (实时监控)
+            from trading_engine_v2 import RealtimeTrader
+            trader = RealtimeTrader(config)
+            trader.start()
+            break
+
+        elif choice == "3":
             # 修改参数
             modify_parameters(config)
 
-        elif choice == "3":
+        elif choice == "4":
             # 配置API
             configure_api(config)
 
-        elif choice == "4":
+        elif choice == "5":
             # 查看历史（需要先创建引擎）
             engine = TradingEngine(config)
             view_trade_history(engine)
 
-        elif choice == "5":
+        elif choice == "6":
             # 退出
             print("\n再见!")
             sys.exit(0)

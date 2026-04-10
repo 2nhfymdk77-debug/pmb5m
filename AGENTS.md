@@ -2,7 +2,10 @@
 
 ## 项目概览
 
-这是一个基于 Python 的 Polymarket 平台自动交易系统，用于 5 分钟比特币预测。项目支持真实 API 模式，带有详细的实时交易仪表盘。
+这是一个基于 Python 的 Polymarket 平台自动交易系统，用于 5 分钟比特币预测。项目支持两种运行模式：
+
+- **V1 (周期模式)**：基于5分钟周期的交易模式
+- **V2 (实时监控)**：实时监控价格变动，达到触发条件立即交易（推荐）
 
 **技术栈**：Python 3.12 + py-clob-client + requests
 
@@ -12,9 +15,11 @@
 polymarket-trader/
 ├── config.py                    # 配置管理模块
 ├── polymarket_api.py            # Polymarket API 客户端
-├── trading_engine.py            # 交易引擎（核心逻辑）
+├── trading_engine.py            # 交易引擎 V1（周期模式）
+├── trading_engine_v2.py         # 交易引擎 V2（实时监控）- 推荐
 ├── ui_display.py                # 界面显示模块
 ├── main.py                      # 主程序入口
+├── main_v2.py                   # V2 入口
 ├── requirements.txt             # 依赖列表
 ├── .env.example                 # 环境变量示例
 ├── AGENTS.md                    # 本规范文档
@@ -22,7 +27,43 @@ polymarket-trader/
 └── README.md                    # 项目根说明
 ```
 
-## 核心功能模块
+## 运行方式
+
+### V2 实时监控模式（推荐）
+```bash
+python main_v2.py
+```
+
+### V1 周期模式
+```bash
+python main.py
+```
+
+## V2 实时交易引擎特性
+
+### 核心优势
+1. **实时监控**：不间断监控价格变动，无需等待周期
+2. **极速触发**：价格达到目标立即执行交易
+3. **简化输出**：只显示关键信息，清晰易读
+4. **状态机架构**：清晰的状态转换逻辑
+
+### 状态流转
+```
+IDLE (空闲) 
+  ↓ 价格达到买入条件
+MONITORING_ENTRY (监控买入)
+  ↓ 确认买入
+HOLDING (持仓)
+  ↓ 开始监控
+MONITORING_EXIT (监控卖出)
+  ↓ 触发止损/止盈/结算
+IDLE (空闲)
+```
+
+### 价格监控速度
+- 使用并行请求获取 YES/NO 价格
+- 超时时间 3 秒
+- 最小检查间隔 10ms
 
 ### 1. 配置管理 (config.py)
 

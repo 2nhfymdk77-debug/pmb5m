@@ -905,6 +905,66 @@ class PolymarketClient:
                 return None
         
         return None
+    
+    def get_prices_fast(self, yes_token_id: str, no_token_id: str, timeout: float = 3.0) -> Optional[Dict[str, float]]:
+        """快速获取价格 - 极简版，最小延迟
+        
+        Args:
+            yes_token_id: YES代币ID
+            no_token_id: NO代币ID
+            timeout: 请求超时时间（秒）
+        
+        Returns:
+            {"YES": price, "NO": price} 或 None
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        
+        def fetch_price(token_id: str) -> float:
+            try:
+                url = f"https://clob.polymarket.com/book?token_id={token_id}"
+                resp = requests.get(url, timeout=timeout)
+                if resp.status_code == 200:
+                    book = resp.json()
+                    asks = book.get("asks", [])
+                    bids = book.get("bids", [])
+                    
+                    if asks and bids:
+                        best_ask = float(asks[0].get("price", 0.5))
+                        best_bid = float(bids[0].get("price", 0.5))
+                        price = (best_ask + best_bid) / 2
+                    elif asks:
+                        price = float(asks[0].get("price", 0.5))
+                    elif bids:
+                        price = float(bids[0].get("price", 0.5))
+                    else:
+                        return 0.5
+                    
+                    # 转换为小数格式
+                    if price > 1:
+                        price = price / 100.0
+                    return price
+            except:
+                pass
+            return 0.5
+        
+        try:
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                future_yes = executor.submit(fetch_price, yes_token_id)
+                future_no = executor.submit(fetch_price, no_token_id)
+                
+                yes_price = future_yes.result(timeout=timeout + 1)
+                no_price = future_no.result(timeout=timeout + 1)
+            
+            # 价格修正：YES + NO ≈ 1
+            if yes_price > 0 and no_price > 0:
+                # 使用平均值修正
+                if abs(yes_price + no_price - 1.0) > 0.1:
+                    no_price = 1.0 - yes_price
+            
+            return {"YES": yes_price, "NO": no_price}
+        except:
+            return None
+    
     # ==================== 余额方法 ====================
 
     def check_and_initialize_allowance(self) -> Dict[str, Any]:
