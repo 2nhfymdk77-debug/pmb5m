@@ -100,7 +100,7 @@ class RealtimeTrader:
         print("\n[启动] 开始实时监控...")
         print(f"  买入价: {int(self.config.entry_price)}%")
         print(f"  止损价: 买入价-10% (动态)")
-        print(f"  止盈价: 前4分钟95%, 最后30秒不执行")
+        print(f"  止盈价: 前4分钟95%, 最后1分钟不执行")
         print("-" * 50)
         
         self.is_running = True
@@ -290,9 +290,9 @@ class RealtimeTrader:
         # 止损 = 买入价格 - 10%（如买入70%，止损60%）
         stop_loss = entry_price - 0.10
         
-        # 止盈策略：前4分钟止盈95%，最后30秒不执行止盈
-        if remaining <= 30:
-            # 最后30秒：不执行止盈
+        # 止盈策略：前4分钟止盈95%，最后1分钟不执行止盈
+        if remaining <= 60:
+            # 最后1分钟：不执行止盈
             take_profit = 1.0  # 设置为100%，实际不会触发
         else:
             # 前4分钟：止盈95%
@@ -667,7 +667,7 @@ class RealtimeTrader:
         print(f"  余额: ${self.balance:.2f}")
         print(f"  买入: {int(self.config.entry_price)}%")
         print(f"  止损: 买入价-10% (动态)")
-        print(f"  止盈: 前4分钟95%, 最后30秒不执行")
+        print(f"  止盈: 前4分钟95%, 最后1分钟不执行")
         print()
         
         while True:
