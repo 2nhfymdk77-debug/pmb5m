@@ -194,11 +194,13 @@ class RealtimeTrader:
                 if self.yes_token_id:
                     yes_balance = self.client.get_token_balance(self.yes_token_id)
                     if yes_balance > 0:
+                        entry_price = self.config.entry_price / 100.0
                         self.position = {
                             "token": "YES",
                             "token_id": self.yes_token_id,
                             "size": yes_balance,
-                            "entry_price": self.config.entry_price / 100.0,
+                            "entry_price": entry_price,
+                            "last_minute_stop_loss": entry_price + 0.10,  # 预计算最后1分钟止损价
                         }
                         self.has_traded_in_event = True
                         self.state = self.STATE_HOLDING
@@ -209,11 +211,13 @@ class RealtimeTrader:
                 if self.no_token_id:
                     no_balance = self.client.get_token_balance(self.no_token_id)
                     if no_balance > 0:
+                        entry_price = self.config.entry_price / 100.0
                         self.position = {
                             "token": "NO",
                             "token_id": self.no_token_id,
                             "size": no_balance,
-                            "entry_price": self.config.entry_price / 100.0,
+                            "entry_price": entry_price,
+                            "last_minute_stop_loss": entry_price + 0.10,  # 预计算最后1分钟止损价
                         }
                         self.has_traded_in_event = True
                         self.state = self.STATE_HOLDING
@@ -287,31 +291,28 @@ class RealtimeTrader:
                 return
         
         # V3 动态止损止盈策略
-        # 止损策略：前4分钟固定45%，最后1分钟=买入价+10%
+        # 止损策略：前4分钟固定45%，最后1分钟=买入价+10%（使用预计算值）
         if remaining <= 60:
-            # 最后1分钟：止损 = 买入价 + 10%（如买入70%，止损80%）
-            stop_loss = entry_price + 0.10
+            # 最后1分钟：使用预计算的止损价格
+            stop_loss = self.position.get("last_minute_stop_loss", entry_price + 0.10)
+            # 最后1分钟止损：价格 >= 止损价触发
+            if current_price >= stop_loss:
+                self._execute_sell("STOP_LOSS", current_price)
+                return
         else:
-            # 前4分钟：止损固定45%
+            # 前4分钟：止损固定45%，价格 <= 45% 触发
             stop_loss = 0.45
+            if current_price <= stop_loss:
+                self._execute_sell("STOP_LOSS", current_price)
+                return
         
         # 止盈策略：前4分钟止盈95%，最后1分钟不执行止盈
-        if remaining <= 60:
-            # 最后1分钟：不执行止盈
-            take_profit = 1.0  # 设置为100%，实际不会触发
-        else:
+        if remaining > 60:
             # 前4分钟：止盈95%
             take_profit = 0.95
-        
-        # 检查止损
-        if current_price <= stop_loss:
-            self._execute_sell("STOP_LOSS", current_price)
-            return
-        
-        # 检查止盈
-        if current_price >= take_profit:
-            self._execute_sell("TAKE_PROFIT", current_price)
-            return
+            if current_price >= take_profit:
+                self._execute_sell("TAKE_PROFIT", current_price)
+                return
         
         # 检查事件是否结束
         if time.time() >= self.event_end_time:
@@ -481,16 +482,23 @@ class RealtimeTrader:
                         break
                 
                 if actual_balance > 0:
+                    # 计算最后1分钟的止损价格（买入价+10%）
+                    last_minute_stop_loss = best_ask + 0.10
+                    if last_minute_stop_loss > 1.0:
+                        last_minute_stop_loss = 1.0  # 上限100%
+                    
                     self.position = {
                         "token": token,
                         "token_id": token_id,
                         "size": actual_balance,
                         "entry_price": best_ask,
+                        "last_minute_stop_loss": last_minute_stop_loss,  # 预计算最后1分钟止损价
                     }
                     self.has_traded_in_event = True
                     self.state = self.STATE_HOLDING
                     self._need_check_position = False
                     print(f"[确认] 买入成功 {actual_balance:.2f}股")
+                    print(f"[止损] 前4分钟45%, 最后1分钟{int(last_minute_stop_loss*100)}%")
                     self._print_stats()
                 else:
                     print("[等待] 买入未立即成交，继续监控...")
