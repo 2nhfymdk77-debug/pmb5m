@@ -99,8 +99,8 @@ class RealtimeTrader:
         
         print("\n[启动] 开始实时监控...")
         print(f"  买入价: {int(self.config.entry_price)}%")
-        print(f"  止损价: {int(self.config.stop_loss)}%")
-        print(f"  止盈价: {int(self.config.take_profit)}%")
+        print(f"  止损价: 买入价-10% (动态)")
+        print(f"  止盈价: 前4分钟95%, 最后30秒不执行")
         print("-" * 50)
         
         self.is_running = True
@@ -258,14 +258,18 @@ class RealtimeTrader:
         self.state = self.STATE_MONITORING_EXIT
     
     def _handle_monitoring_exit(self, yes_price: float, no_price: float) -> None:
-        """监控卖出价格 - 检查止损止盈"""
+        """监控卖出价格 - 检查止损止盈（V3动态策略）"""
         if not self.position:
             self.state = self.STATE_IDLE
             return
         
         token = self.position["token"]
         token_id = self.position["token_id"]
+        entry_price = self.position["entry_price"]  # 买入价格（小数格式，如0.70）
         current_price = yes_price if token == "YES" else no_price
+        
+        # 计算剩余时间
+        remaining = self.event_end_time - time.time()
         
         # 定期检查实际持仓（每10次循环检查一次）
         if not hasattr(self, '_balance_check_counter'):
@@ -282,8 +286,17 @@ class RealtimeTrader:
                 self.state = self.STATE_IDLE
                 return
         
-        stop_loss = self.config.stop_loss / 100.0
-        take_profit = self.config.take_profit / 100.0
+        # V3 动态止损止盈策略
+        # 止损 = 买入价格 - 10%（如买入70%，止损60%）
+        stop_loss = entry_price - 0.10
+        
+        # 止盈策略：前4分钟止盈95%，最后30秒不执行止盈
+        if remaining <= 30:
+            # 最后30秒：不执行止盈
+            take_profit = 1.0  # 设置为100%，实际不会触发
+        else:
+            # 前4分钟：止盈95%
+            take_profit = 0.95
         
         # 检查止损
         if current_price <= stop_loss:
@@ -650,9 +663,11 @@ class RealtimeTrader:
     
     def _confirm_params(self) -> None:
         """确认交易参数"""
-        print("\n[参数]")
+        print("\n[参数] V3 动态策略")
         print(f"  余额: ${self.balance:.2f}")
-        print(f"  买入: {int(self.config.entry_price)}% | 止损: {int(self.config.stop_loss)}% | 止盈: {int(self.config.take_profit)}%")
+        print(f"  买入: {int(self.config.entry_price)}%")
+        print(f"  止损: 买入价-10% (动态)")
+        print(f"  止盈: 前4分钟95%, 最后30秒不执行")
         print()
         
         while True:
