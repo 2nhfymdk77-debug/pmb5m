@@ -143,14 +143,14 @@ class MainWindow(QMainWindow):
     def _init_ui(self):
         """初始化界面"""
         self.setWindowTitle("Polymarket 自动交易系统")
-        self.setGeometry(100, 100, 1200, 800)
+        self.setGeometry(80, 50, 1400, 900)  # 更大的窗口
         
         # 主布局
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
-        main_layout.setSpacing(5)
-        main_layout.setContentsMargins(10, 10, 10, 10)
+        main_layout.setSpacing(8)
+        main_layout.setContentsMargins(15, 15, 15, 15)
         
         # 顶部：标题栏
         title_frame = QFrame()
@@ -202,9 +202,11 @@ class MainWindow(QMainWindow):
                 background: #0078d4;
                 color: white;
                 border: none;
-                padding: 8px 16px;
-                font-size: 12px;
-                border-radius: 3px;
+                padding: 12px 24px;
+                font-size: 14px;
+                font-weight: bold;
+                border-radius: 5px;
+                min-width: 120px;
             }
             QPushButton:hover {
                 background: #106ebe;
@@ -224,11 +226,36 @@ class MainWindow(QMainWindow):
         
         # 配置表格
         config_group = QGroupBox("策略配置")
+        config_group.setStyleSheet("""
+            QGroupBox {
+                font-weight: bold;
+                font-size: 14px;
+            }
+        """)
         config_layout = QVBoxLayout(config_group)
         
         self.config_table = ExcelStyleTable(8, 4)
+        self.config_table.setStyleSheet("""
+            QTableWidget {
+                border: 1px solid #ccc;
+                background: white;
+                gridline-color: #e0e0e0;
+                font-size: 13px;
+            }
+            QTableWidget::item {
+                padding: 5px;
+            }
+            QHeaderView::section {
+                background: #f5f5f5;
+                border: 1px solid #ccc;
+                padding: 8px;
+                font-weight: bold;
+                font-size: 13px;
+            }
+        """)
         self.config_table.setHorizontalHeaderLabels(["参数", "值", "单位", "说明"])
         self.config_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.config_table.verticalHeader().setDefaultSectionSize(30)
         
         # 配置项
         config_items = [
@@ -336,35 +363,36 @@ class MainWindow(QMainWindow):
         history_group.setStyleSheet("""
             QGroupBox {
                 font-weight: bold;
-                font-size: 14px;
+                font-size: 16px;
                 border: 2px solid #0078d4;
                 border-radius: 5px;
-                margin-top: 12px;
-                padding-top: 8px;
+                margin-top: 15px;
+                padding-top: 10px;
                 background: #f8f9fa;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
-                left: 15px;
-                padding: 0 8px;
+                left: 20px;
+                padding: 0 10px;
                 color: #0078d4;
+                font-size: 16px;
             }
         """)
         history_layout = QVBoxLayout(history_group)
-        history_layout.setContentsMargins(5, 5, 5, 5)
+        history_layout.setContentsMargins(8, 8, 8, 8)
         
         self.history_table = ExcelStyleTable(0, 7)
         self.history_table.setStyleSheet("""
             QTableWidget {
                 border: 1px solid #ccc;
                 background: white;
-                gridline-color: #e0e0e0;
-                font-size: 13px;
+                gridline-color: #d0d0d0;
+                font-size: 15px;
                 font-weight: 500;
             }
             QTableWidget::item {
-                padding: 5px;
-                height: 25px;
+                padding: 8px;
+                height: 32px;
             }
             QTableWidget::item:selected {
                 background: #0078d4;
@@ -374,9 +402,9 @@ class MainWindow(QMainWindow):
                 background: #0078d4;
                 color: white;
                 border: none;
-                padding: 6px;
+                padding: 10px;
                 font-weight: bold;
-                font-size: 12px;
+                font-size: 14px;
             }
         """)
         self.history_table.setHorizontalHeaderLabels([
@@ -384,10 +412,10 @@ class MainWindow(QMainWindow):
         ])
         self.history_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.history_table.setRowCount(50)
-        self.history_table.verticalHeader().setDefaultSectionSize(28)
+        self.history_table.verticalHeader().setDefaultSectionSize(36)  # 行高36px
         
         history_layout.addWidget(self.history_table)
-        layout.addWidget(history_group, 3)  # 比例3，占用最大空间
+        layout.addWidget(history_group, 5)  # 比例5，占用最大空间
         
         # 日志区域（紧凑）
         log_group = QGroupBox("运行日志")
