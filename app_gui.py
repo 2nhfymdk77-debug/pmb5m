@@ -234,7 +234,7 @@ class MainWindow(QMainWindow):
         """)
         config_layout = QVBoxLayout(config_group)
         
-        self.config_table = ExcelStyleTable(8, 4)
+        self.config_table = ExcelStyleTable(12, 4)
         self.config_table.setStyleSheet("""
             QTableWidget {
                 border: 1px solid #ccc;
@@ -266,6 +266,10 @@ class MainWindow(QMainWindow):
             ("买入限制", "85", "%", "价格超过此值不买入，0=不限制"),
             ("最后1分钟止损", "0", "%", "最后1分钟止损价，0=使用固定止损"),
             ("最后1分钟止盈", "0", "%", "最后1分钟止盈价，0=不止盈"),
+            ("基础仓位比例", "12", "", "初始余额的1/N作为基础仓位"),
+            ("仓位倍增阈值", "3", "倍", "余额达到N倍初始余额时仓位翻倍"),
+            ("最大仓位倍数", "8", "倍", "仓位最大倍数限制，防止过度扩张"),
+            ("最小开仓金额", "1", "$", "最小开仓金额，低于此值等待结算"),
             ("API密钥", "", "", "已配置" if self._check_api_keys() else "未配置"),
         ]
         
@@ -492,6 +496,12 @@ class MainWindow(QMainWindow):
             last_min_stop = float(self.config_table.item(5, 1).text())
             last_min_profit = float(self.config_table.item(6, 1).text())
             
+            # 仓位控制参数
+            position_divisor = float(self.config_table.item(7, 1).text())  # 基础仓位比例
+            position_multiplier_threshold = float(self.config_table.item(8, 1).text())  # 倍增阈值
+            max_position_multiplier = float(self.config_table.item(9, 1).text())  # 最大倍数
+            min_position_amount = float(self.config_table.item(10, 1).text())  # 最小开仓金额
+            
             # 创建交易引擎
             self.trader = UnifiedTrader(
                 config=config,
@@ -502,6 +512,10 @@ class MainWindow(QMainWindow):
                 buy_limit=buy_limit,
                 last_minute_stop_loss=last_min_stop if last_min_stop > 0 else None,
                 last_minute_take_profit=last_min_profit if last_min_profit > 0 else None,
+                position_divisor=position_divisor,
+                position_multiplier_threshold=position_multiplier_threshold,
+                max_position_multiplier=max_position_multiplier,
+                min_position_amount=min_position_amount,
                 on_status_update=self._on_status_update,
                 on_trade_update=self._on_trade_update,
                 on_log=self._on_log,

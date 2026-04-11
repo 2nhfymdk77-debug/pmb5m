@@ -61,6 +61,11 @@ class UnifiedTrader:
         buy_limit: float = 85.0,
         last_minute_stop_loss: Optional[float] = None,
         last_minute_take_profit: Optional[float] = None,
+        # 仓位控制参数
+        position_divisor: float = 12.0,  # 基础仓位比例（初始余额的1/N）
+        position_multiplier_threshold: float = 3.0,  # 仓位倍增阈值（余额达到N倍时翻倍）
+        max_position_multiplier: float = 8.0,  # 最大仓位倍数
+        min_position_amount: float = 1.0,  # 最小开仓金额
         # 回调函数（用于GUI更新）
         on_status_update: Optional[Callable] = None,
         on_trade_update: Optional[Callable] = None,
@@ -76,6 +81,12 @@ class UnifiedTrader:
         self.buy_limit = buy_limit / 100.0 if buy_limit > 0 else 1.0
         self.last_minute_stop_loss = last_minute_stop_loss / 100.0 if last_minute_stop_loss else None
         self.last_minute_take_profit = last_minute_take_profit / 100.0 if last_minute_take_profit else None
+        
+        # 仓位控制参数
+        self.position_divisor = position_divisor
+        self.position_multiplier_threshold = position_multiplier_threshold
+        self.max_position_multiplier = max_position_multiplier
+        self.min_position_amount = min_position_amount
         
         # 回调函数
         self.on_status_update = on_status_update
@@ -163,6 +174,12 @@ class UnifiedTrader:
         self.log(f"止损价格: {int(self.stop_loss * 100)}%")
         self.log(f"止盈价格: {int(self.take_profit * 100)}%")
         self.log(f"买入限制: {int(self.buy_limit * 100)}%" if self.buy_limit < 1 else "买入限制: 无")
+        
+        # 仓位控制参数
+        self.log(f"基础仓位: 初始余额的1/{int(self.position_divisor)}")
+        self.log(f"仓位倍增阈值: {int(self.position_multiplier_threshold)}倍")
+        self.log(f"最大仓位倍数: {int(self.max_position_multiplier)}倍")
+        self.log(f"最小开仓金额: ${self.min_position_amount}")
         
         self.is_running = True
         self.state = self.STATE_IDLE
@@ -561,18 +578,41 @@ class UnifiedTrader:
     
     def _calculate_position(self, price: float) -> float:
         """计算仓位"""
-        if self.balance < 1:
+        if self.balance < self.min_position_amount:
             return 0
         
-        base_amount = self.initial_balance / 12
-        multiplier = 1
+        # 基础仓位 = 初始余额 / position_divisor
+        base_amount = self.initial_balance / self.position_divisor
         
+        # 仓位倍数计算
+        multiplier = 1.0
         threshold = self.initial_balance
-        while self.balance >= threshold * 3:
-            multiplier *= 2
-            threshold *= 3
         
-        return base_amount * multiplier
+        # 当余额达到 threshold * position_multiplier_threshold 时，仓位翻倍
+        while self.balance >= threshold * self.position_multiplier_threshold:
+            multiplier *= 2
+            threshold *= self.position_multiplier_threshold
+            
+            # 限制最大倍数
+            if multiplier > self.max_position_multiplier:
+                multiplier = self.max_position_multiplier
+                break
+        
+        position_amount = base_amount * multiplier
+        
+        # 确保仓位至少是最小开仓金额
+        if position_amount < self.min_position_amount:
+            # 如果余额足够，使用最小开仓金额
+            if self.balance >= self.min_position_amount:
+                position_amount = self.min_position_amount
+            else:
+                return 0
+        
+        # 确保仓位不超过当前余额
+        if position_amount > self.balance:
+            position_amount = self.balance
+        
+        return position_amount
     
     def _fetch_market_data(self) -> Optional[Dict]:
         """获取市场数据"""
