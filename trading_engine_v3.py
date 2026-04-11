@@ -291,22 +291,22 @@ class RealtimeTrader:
                 return
         
         # V3 动态止损止盈策略
-        # 止损策略：前4分钟固定45%，最后1分钟=买入价+10%（使用预计算值）
+        # 止损策略：双重止损
+        # - 止损1：价格 <= 45%（全时段生效，防止大亏）
+        # - 止损2：最后1分钟，价格 >= 买入价+10%（锁利润）
+        if current_price <= 0.45:
+            # 止损1：价格跌破45%，全时段触发
+            self._execute_sell("STOP_LOSS", current_price)
+            return
+        
         if remaining <= 60:
-            # 最后1分钟：使用预计算的止损价格
-            stop_loss = self.position.get("last_minute_stop_loss", entry_price + 0.10)
-            # 最后1分钟止损：价格 >= 止损价触发
-            if current_price >= stop_loss:
-                self._execute_sell("STOP_LOSS", current_price)
-                return
-        else:
-            # 前4分钟：止损固定45%，价格 <= 45% 触发
-            stop_loss = 0.45
-            if current_price <= stop_loss:
-                self._execute_sell("STOP_LOSS", current_price)
+            # 最后1分钟：检查止损2（买入价+10%）
+            stop_loss_2 = self.position.get("last_minute_stop_loss", entry_price + 0.10)
+            if current_price >= stop_loss_2:
+                self._execute_sell("STOP_LOSS_LAST_MIN", current_price)
                 return
         
-        # 止盈策略：前4分钟止盈95%，最后1分钟不执行止盈
+        # 止盈策略：仅前4分钟执行，最后1分钟等结算
         if remaining > 60:
             # 前4分钟：止盈95%
             take_profit = 0.95
