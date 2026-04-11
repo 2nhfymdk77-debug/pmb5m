@@ -178,7 +178,7 @@ class MainWindow(QMainWindow):
         trade_widget = self._create_trade_panel()
         splitter.addWidget(trade_widget)
         
-        splitter.setSizes([300, 500])
+        splitter.setSizes([180, 620])  # 配置区域更小，交易区域更大
         main_layout.addWidget(splitter)
         
         # 设置样式
@@ -315,12 +315,21 @@ class MainWindow(QMainWindow):
         """创建交易面板"""
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setSpacing(8)
+        layout.setSpacing(6)
         
         # 状态区域（紧凑）
         status_group = QGroupBox("实时状态")
+        status_group.setStyleSheet("""
+            QGroupBox {
+                font-weight: bold;
+                font-size: 12px;
+                margin-top: 8px;
+                padding-top: 5px;
+            }
+        """)
         status_layout = QHBoxLayout(status_group)
-        status_layout.setContentsMargins(5, 5, 5, 5)
+        status_layout.setContentsMargins(5, 2, 5, 2)
+        status_layout.setSpacing(5)
         
         self.status_labels = {}
         status_items = [
@@ -342,15 +351,15 @@ class MainWindow(QMainWindow):
                 }
             """)
             frame_layout = QVBoxLayout(frame)
-            frame_layout.setContentsMargins(8, 4, 8, 4)
-            frame_layout.setSpacing(2)
+            frame_layout.setContentsMargins(6, 2, 6, 2)
+            frame_layout.setSpacing(1)
             
             name_label = QLabel(name)
-            name_label.setStyleSheet("color: #666; font-size: 10px;")
+            name_label.setStyleSheet("color: #666; font-size: 9px;")
             frame_layout.addWidget(name_label)
             
             value_label = QLabel(value)
-            value_label.setStyleSheet("font-size: 16px; font-weight: bold;")
+            value_label.setStyleSheet("font-size: 14px; font-weight: bold;")
             frame_layout.addWidget(value_label)
             
             self.status_labels[name] = value_label
@@ -358,7 +367,7 @@ class MainWindow(QMainWindow):
         
         layout.addWidget(status_group, 0)  # 比例0，使用最小高度
         
-        # 交易历史表格（突出显示）
+        # 交易历史表格（主要显示区域）
         history_group = QGroupBox("交易历史")
         history_group.setStyleSheet("""
             QGroupBox {
@@ -366,8 +375,8 @@ class MainWindow(QMainWindow):
                 font-size: 16px;
                 border: 2px solid #0078d4;
                 border-radius: 5px;
-                margin-top: 15px;
-                padding-top: 10px;
+                margin-top: 12px;
+                padding-top: 8px;
                 background: #f8f9fa;
             }
             QGroupBox::title {
@@ -415,29 +424,36 @@ class MainWindow(QMainWindow):
         self.history_table.verticalHeader().setDefaultSectionSize(36)  # 行高36px
         
         history_layout.addWidget(self.history_table)
-        layout.addWidget(history_group, 5)  # 比例5，占用最大空间
+        layout.addWidget(history_group, 6)  # 比例6，主要区域
         
-        # 日志区域（紧凑）
+        # 日志区域（次要显示）
         log_group = QGroupBox("运行日志")
+        log_group.setStyleSheet("""
+            QGroupBox {
+                font-weight: bold;
+                font-size: 12px;
+                margin-top: 8px;
+                padding-top: 5px;
+            }
+        """)
         log_layout = QVBoxLayout(log_group)
         log_layout.setContentsMargins(5, 5, 5, 5)
         
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
-        self.log_text.setMaximumHeight(120)  # 限制最大高度
         self.log_text.setStyleSheet("""
             QTextEdit {
                 background: #1e1e1e;
                 color: #d4d4d4;
                 font-family: Consolas, Monaco, monospace;
-                font-size: 10px;
+                font-size: 11px;
                 border: 1px solid #ccc;
                 border-radius: 3px;
             }
         """)
         log_layout.addWidget(self.log_text)
         
-        layout.addWidget(log_group, 1)  # 比例1，较小空间
+        layout.addWidget(log_group, 3)  # 比例3，次要区域
         
         return widget
     
