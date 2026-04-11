@@ -2,6 +2,7 @@
 Polymarket 实时交易程序
 - V2: 每周期最多交易一次
 - V3: 同一周期内无持仓时可继续交易
+- V4: 基于V3开发的新版本
 """
 import sys
 from config import TradingConfig
@@ -16,20 +17,23 @@ def main():
     print("\n选择交易策略版本:")
     print("  1. V2 - 每周期最多交易一次")
     print("  2. V3 - 同一周期内无持仓时可继续交易")
+    print("  3. V4 - 新版本开发中")
     print()
     
     version = None
     while version is None:
         try:
-            choice = input("请选择 (1/2): ").strip()
+            choice = input("请选择 (1/2/3): ").strip()
             if choice == '1':
                 version = 'V2'
             elif choice == '2':
                 version = 'V3'
+            elif choice == '3':
+                version = 'V4'
             else:
-                print("无效输入，请输入 1 或 2")
+                print("无效输入，请输入 1、2 或 3")
         except:
-            print("无效输入，请输入 1 或 2")
+            print("无效输入，请输入 1、2 或 3")
     
     print(f"\n[版本] {version}")
     
@@ -40,8 +44,10 @@ def main():
     try:
         if version == 'V2':
             from trading_engine_v2 import RealtimeTrader
-        else:
+        elif version == 'V3':
             from trading_engine_v3 import RealtimeTrader
+        else:
+            from trading_engine_v4 import RealtimeTrader
         trader = RealtimeTrader(config)
     except Exception as e:
         print(f"[错误] 初始化失败: {e}")
