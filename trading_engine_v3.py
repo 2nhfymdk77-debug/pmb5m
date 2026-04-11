@@ -99,7 +99,7 @@ class RealtimeTrader:
         
         print("\n[启动] 开始实时监控...")
         print(f"  买入价: {int(self.config.entry_price)}%")
-        print(f"  止损价: 前4分钟45%, 最后1分钟买入价+10%")
+        print(f"  止损价: 45% (全时段)")
         print(f"  止盈价: 前4分钟95%, 最后1分钟不执行")
         print("-" * 50)
         
@@ -194,13 +194,11 @@ class RealtimeTrader:
                 if self.yes_token_id:
                     yes_balance = self.client.get_token_balance(self.yes_token_id)
                     if yes_balance > 0:
-                        entry_price = self.config.entry_price / 100.0
                         self.position = {
                             "token": "YES",
                             "token_id": self.yes_token_id,
                             "size": yes_balance,
-                            "entry_price": entry_price,
-                            "last_minute_stop_loss": entry_price + 0.10,  # 预计算最后1分钟止损价
+                            "entry_price": self.config.entry_price / 100.0,
                         }
                         self.has_traded_in_event = True
                         self.state = self.STATE_HOLDING
@@ -211,13 +209,11 @@ class RealtimeTrader:
                 if self.no_token_id:
                     no_balance = self.client.get_token_balance(self.no_token_id)
                     if no_balance > 0:
-                        entry_price = self.config.entry_price / 100.0
                         self.position = {
                             "token": "NO",
                             "token_id": self.no_token_id,
                             "size": no_balance,
-                            "entry_price": entry_price,
-                            "last_minute_stop_loss": entry_price + 0.10,  # 预计算最后1分钟止损价
+                            "entry_price": self.config.entry_price / 100.0,
                         }
                         self.has_traded_in_event = True
                         self.state = self.STATE_HOLDING
@@ -291,20 +287,10 @@ class RealtimeTrader:
                 return
         
         # V3 动态止损止盈策略
-        # 止损策略：双重止损
-        # - 止损1：价格 <= 45%（全时段生效，防止大亏）
-        # - 止损2：最后1分钟，价格 >= 买入价+10%（锁利润）
+        # 止损策略：全时段固定45%
         if current_price <= 0.45:
-            # 止损1：价格跌破45%，全时段触发
             self._execute_sell("STOP_LOSS", current_price)
             return
-        
-        if remaining <= 60:
-            # 最后1分钟：检查止损2（买入价+10%）
-            stop_loss_2 = self.position.get("last_minute_stop_loss", entry_price + 0.10)
-            if current_price >= stop_loss_2:
-                self._execute_sell("STOP_LOSS_LAST_MIN", current_price)
-                return
         
         # 止盈策略：仅前4分钟执行，最后1分钟等结算
         if remaining > 60:
@@ -482,23 +468,17 @@ class RealtimeTrader:
                         break
                 
                 if actual_balance > 0:
-                    # 计算最后1分钟的止损价格（买入价+10%）
-                    last_minute_stop_loss = best_ask + 0.10
-                    if last_minute_stop_loss > 1.0:
-                        last_minute_stop_loss = 1.0  # 上限100%
-                    
                     self.position = {
                         "token": token,
                         "token_id": token_id,
                         "size": actual_balance,
                         "entry_price": best_ask,
-                        "last_minute_stop_loss": last_minute_stop_loss,  # 预计算最后1分钟止损价
                     }
                     self.has_traded_in_event = True
                     self.state = self.STATE_HOLDING
                     self._need_check_position = False
                     print(f"[确认] 买入成功 {actual_balance:.2f}股")
-                    print(f"[止损] 前4分钟45%, 最后1分钟{int(last_minute_stop_loss*100)}%")
+                    print(f"[止损] 45% (全时段)")
                     self._print_stats()
                 else:
                     print("[等待] 买入未立即成交，继续监控...")
@@ -679,7 +659,7 @@ class RealtimeTrader:
         print("\n[参数] V3 动态策略")
         print(f"  余额: ${self.balance:.2f}")
         print(f"  买入: {int(self.config.entry_price)}%")
-        print(f"  止损: 前4分钟45%, 最后1分钟买入价+10%")
+        print(f"  止损: 45% (全时段)")
         print(f"  止盈: 前4分钟95%, 最后1分钟不执行")
         print()
         
