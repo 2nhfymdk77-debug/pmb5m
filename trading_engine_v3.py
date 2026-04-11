@@ -101,7 +101,7 @@ class RealtimeTrader:
         print(f"  买入价: {int(self.config.entry_price)}%")
         print(f"  止损价: 45% (全时段)")
         print(f"  止盈价: 95% (全时段)")
-        print(f"  买入限制: 价格 >= 80% 跳过")
+        print(f"  买入限制: 价格 >= 85% 跳过")
         print("-" * 50)
         
         self.is_running = True
@@ -421,8 +421,8 @@ class RealtimeTrader:
         if best_ask < entry_price:
             print(f"\n[跳过] {token} 卖一价 {int(best_ask*100)}% < 买入价 {int(entry_price*100)}%")
             return
-        if best_ask >= 0.80:
-            print(f"\n[跳过] {token} 卖一价 {int(best_ask*100)}% >= 80%，价格过高")
+        if best_ask >= 0.85:
+            print(f"\n[跳过] {token} 卖一价 {int(best_ask*100)}% >= 85%，价格过高")
             return
         
         # 先查询最新余额
@@ -659,7 +659,7 @@ class RealtimeTrader:
         print(f"  买入: {int(self.config.entry_price)}%")
         print(f"  止损: 45% (全时段)")
         print(f"  止盈: 95% (全时段)")
-        print(f"  买入限制: 价格 >= 80% 跳过")
+        print(f"  买入限制: 价格 >= 85% 跳过")
         print()
         
         while True:
