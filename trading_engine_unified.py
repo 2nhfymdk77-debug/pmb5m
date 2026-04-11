@@ -577,61 +577,66 @@ class UnifiedTrader:
     def _fetch_market_data(self) -> Optional[Dict]:
         """获取市场数据"""
         try:
-            # 获取5分钟BTC市场
-            url = "https://gamma-api.polymarket.com/markets"
-            params = {
-                "slug": "5-minute-btc-price-direction",
-                "closed": "false",
-            }
+            # 计算当前事件slug（与V3相同）
+            edt = timezone(timedelta(hours=-4))
+            now_edt = datetime.now(edt)
+            minute = now_edt.minute
+            period_minute = (minute // 5) * 5
+            period_start = now_edt.replace(minute=period_minute, second=0, microsecond=0)
+            period_ts = int(period_start.timestamp())
+            slug = f"btc-updown-5m-{period_ts}"
             
-            resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
-            if resp.status_code != 200:
-                self.log(f"API返回错误: {resp.status_code}")
+            # 获取市场
+            market = self.client.get_market_by_slug(slug)
+            if not market:
+                self.log(f"市场未找到: {slug}")
                 return None
             
-            markets = resp.json()
-            if not markets:
-                self.log("未找到活跃市场")
+            market_id = market.get("condition_id", "") or market.get("id", "")
+            if not market_id:
+                self.log("market_id为空")
                 return None
             
-            market = markets[0]
-            self.market_id = market.get("conditionId", "")
-            
-            # 解析代币ID
-            tokens = market.get("tokens", [])
-            for token in tokens:
-                outcome = token.get("outcome", "")
-                token_id = token.get("token_id", "")
-                if outcome == "Yes":
-                    self.yes_token_id = token_id
-                elif outcome == "No":
-                    self.no_token_id = token_id
+            # 检查是否是新事件
+            if market_id != self.market_id:
+                self.market_id = market_id
+                
+                # 新周期重置状态
+                if self.mode == self.MODE_SINGLE:
+                    self.has_traded_in_event = False
+                self.position = None
+                self.state = self.STATE_IDLE
+                
+                # 获取token IDs
+                token_ids = market.get("clobTokenIds", [])
+                if isinstance(token_ids, str):
+                    import json
+                    token_ids = json.loads(token_ids)
+                
+                if len(token_ids) >= 2:
+                    self.yes_token_id = token_ids[0]
+                    self.no_token_id = token_ids[1]
+                else:
+                    self.log(f"token_ids数量不足: {len(token_ids)}")
+                    return None
+                
+                # 获取结束时间
+                end_ts = market.get("endDate") or market.get("end_date")
+                if end_ts:
+                    try:
+                        self.event_end_time = float(end_ts)
+                    except:
+                        self.event_end_time = time.time() + 300
+                else:
+                    self.event_end_time = time.time() + 300
+                
+                self.log(f"新周期: {slug}")
             
             # 获取价格
             yes_price, no_price = self._get_prices()
             
-            # 如果价格都为0，记录警告
-            if yes_price == 0 and no_price == 0:
-                self.log("价格获取失败，使用默认值")
-                yes_price, no_price = 0.5, 0.5
-            
             # 计算剩余时间
-            end_date = market.get("end_date_iso")
-            if end_date:
-                try:
-                    end_dt = datetime.fromisoformat(end_date.replace("Z", "+00:00"))
-                    self.event_end_time = end_dt.timestamp()
-                    remaining = max(0, self.event_end_time - time.time())
-                except:
-                    remaining = 300
-            else:
-                remaining = 300
-            
-            # V2模式：检测新周期
-            if self.mode == self.MODE_SINGLE:
-                if self.current_event_id != self.market_id:
-                    self.current_event_id = self.market_id
-                    self.has_traded_in_event = False
+            remaining = max(0, self.event_end_time - time.time())
             
             return {
                 "yes_price": yes_price,
