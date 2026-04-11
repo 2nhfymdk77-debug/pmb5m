@@ -414,6 +414,11 @@ class MainWindow(QMainWindow):
             self.start_btn.setEnabled(False)
             self.stop_btn.setEnabled(True)
             
+            # 立即更新状态显示
+            self.status_labels["状态"].setText("启动中...")
+            self.status_labels["YES价格"].setText("获取中...")
+            self.status_labels["NO价格"].setText("获取中...")
+            
             self._add_log("交易已启动")
             
         except Exception as e:
@@ -445,22 +450,34 @@ class MainWindow(QMainWindow):
     def _update_status(self, status: str, yes_price: float, no_price: float,
                        remaining: float, balance: float, pnl: float):
         """更新状态（主线程）"""
-        self.status_labels["状态"].setText(status)
-        self.status_labels["YES价格"].setText(f"{yes_price:.1f}%")
-        self.status_labels["NO价格"].setText(f"{no_price:.1f}%")
+        # 更新状态
+        if "状态" in self.status_labels:
+            self.status_labels["状态"].setText(status)
         
-        mins = int(remaining // 60)
-        secs = int(remaining % 60)
-        self.status_labels["剩余时间"].setText(f"{mins}:{secs:02d}")
+        # 更新价格（yes_price已经是百分比形式，如70.5表示70.5%）
+        if "YES价格" in self.status_labels:
+            self.status_labels["YES价格"].setText(f"{yes_price:.1f}%")
+        if "NO价格" in self.status_labels:
+            self.status_labels["NO价格"].setText(f"{no_price:.1f}%")
         
-        self.status_labels["余额"].setText(f"${balance:.2f}")
+        # 更新剩余时间
+        if "剩余时间" in self.status_labels:
+            mins = int(remaining // 60)
+            secs = int(remaining % 60)
+            self.status_labels["剩余时间"].setText(f"{mins}:{secs:02d}")
         
-        pnl_text = f"{'+' if pnl >= 0 else ''}${pnl:.2f}"
-        self.status_labels["总盈亏"].setText(pnl_text)
-        if pnl >= 0:
-            self.status_labels["总盈亏"].setStyleSheet("font-size: 14px; font-weight: bold; color: green;")
-        else:
-            self.status_labels["总盈亏"].setStyleSheet("font-size: 14px; font-weight: bold; color: red;")
+        # 更新余额
+        if "余额" in self.status_labels:
+            self.status_labels["余额"].setText(f"${balance:.2f}")
+        
+        # 更新盈亏
+        if "总盈亏" in self.status_labels:
+            pnl_text = f"{'+' if pnl >= 0 else ''}${pnl:.2f}"
+            self.status_labels["总盈亏"].setText(pnl_text)
+            if pnl >= 0:
+                self.status_labels["总盈亏"].setStyleSheet("font-size: 14px; font-weight: bold; color: green;")
+            else:
+                self.status_labels["总盈亏"].setStyleSheet("font-size: 14px; font-weight: bold; color: red;")
     
     def _add_trade_record(self, trade: dict):
         """添加交易记录（主线程）"""

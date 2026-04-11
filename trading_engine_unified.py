@@ -202,6 +202,9 @@ class UnifiedTrader:
             # 获取市场数据
             market_data = self._fetch_market_data()
             if not market_data:
+                # 获取失败时也要更新状态
+                status = self._get_status_text()
+                self.update_status(status, 0, 0, 0)
                 time.sleep(1)
                 return
             
@@ -209,7 +212,7 @@ class UnifiedTrader:
             no_price = market_data.get("no_price", 0)
             remaining = market_data.get("remaining", 0)
             
-            # 更新状态
+            # 更新状态（价格转为百分比）
             status = self._get_status_text()
             self.update_status(status, yes_price * 100, no_price * 100, remaining)
             
@@ -223,6 +226,8 @@ class UnifiedTrader:
                 
         except Exception as e:
             self.log(f"循环错误: {e}", "ERROR")
+            # 出错时也更新状态
+            self.update_status("错误", 0, 0, 0)
             time.sleep(1)
     
     def _get_status_text(self) -> str:
@@ -581,10 +586,12 @@ class UnifiedTrader:
             
             resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
             if resp.status_code != 200:
+                self.log(f"API返回错误: {resp.status_code}")
                 return None
             
             markets = resp.json()
             if not markets:
+                self.log("未找到活跃市场")
                 return None
             
             market = markets[0]
@@ -602,6 +609,11 @@ class UnifiedTrader:
             
             # 获取价格
             yes_price, no_price = self._get_prices()
+            
+            # 如果价格都为0，记录警告
+            if yes_price == 0 and no_price == 0:
+                self.log("价格获取失败，使用默认值")
+                yes_price, no_price = 0.5, 0.5
             
             # 计算剩余时间
             end_date = market.get("end_date_iso")
