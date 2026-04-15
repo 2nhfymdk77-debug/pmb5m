@@ -139,10 +139,13 @@ class MainWindow(QMainWindow):
         self.timer = QTimer()
         self.timer.timeout.connect(self._update_time)
         self.timer.start(1000)
+        
+        # 自动启动交易（延迟500ms，等待窗口完全加载）
+        QTimer.singleShot(500, self._auto_start_trading)
     
     def _init_ui(self):
         """初始化界面"""
-        self.setWindowTitle("Polymarket 自动交易系统")
+        self.setWindowTitle("Polymarket 自动交易系统 - V4策略")
         self.setGeometry(80, 50, 1400, 900)  # 更大的窗口
         
         # 主布局
@@ -156,7 +159,7 @@ class MainWindow(QMainWindow):
         title_frame = QFrame()
         title_frame.setStyleSheet("background: #0078d4; padding: 5px;")
         title_layout = QHBoxLayout(title_frame)
-        title_label = QLabel("Polymarket 自动交易系统")
+        title_label = QLabel("Polymarket 自动交易系统 - V4策略（自动运行）")
         title_label.setStyleSheet("color: white; font-size: 18px; font-weight: bold;")
         title_layout.addWidget(title_label)
         title_layout.addStretch()
@@ -167,19 +170,9 @@ class MainWindow(QMainWindow):
         
         main_layout.addWidget(title_frame)
         
-        # 中间：分割器
-        splitter = QSplitter(Qt.Vertical)
-        
-        # 上半部分：配置区域
-        config_widget = self._create_config_panel()
-        splitter.addWidget(config_widget)
-        
-        # 下半部分：交易区域
+        # 中间：交易区域（直接显示，无配置面板）
         trade_widget = self._create_trade_panel()
-        splitter.addWidget(trade_widget)
-        
-        splitter.setSizes([180, 620])  # 配置区域更小，交易区域更大
-        main_layout.addWidget(splitter)
+        main_layout.addWidget(trade_widget)
         
         # 设置样式
         self.setStyleSheet("""
@@ -218,102 +211,6 @@ class MainWindow(QMainWindow):
                 background: #a0a0a0;
             }
         """)
-    
-    def _create_config_panel(self) -> QWidget:
-        """创建配置面板"""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        
-        # 配置表格
-        config_group = QGroupBox("策略配置")
-        config_group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                font-size: 14px;
-            }
-        """)
-        config_layout = QVBoxLayout(config_group)
-        
-        self.config_table = ExcelStyleTable(12, 4)
-        self.config_table.setStyleSheet("""
-            QTableWidget {
-                border: 1px solid #ccc;
-                background: white;
-                gridline-color: #e0e0e0;
-                font-size: 13px;
-            }
-            QTableWidget::item {
-                padding: 5px;
-            }
-            QHeaderView::section {
-                background: #f5f5f5;
-                border: 1px solid #ccc;
-                padding: 8px;
-                font-weight: bold;
-                font-size: 13px;
-            }
-        """)
-        self.config_table.setHorizontalHeaderLabels(["参数", "值", "单位", "说明"])
-        self.config_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.config_table.verticalHeader().setDefaultSectionSize(30)
-        
-        # 配置项
-        config_items = [
-            ("策略模式", "CONTINUOUS", "", "CYCLE=周期模式, SINGLE=每周期一次, CONTINUOUS=连续"),
-            ("买入价格", "70", "%", "价格达到此值时买入"),
-            ("止损价格", "45", "%", "价格跌到此值时止损卖出"),
-            ("止盈价格", "95", "%", "价格涨到此值时止盈卖出"),
-            ("买入限制", "85", "%", "价格超过此值不买入，0=不限制"),
-            ("最后1分钟止损", "0", "%", "最后1分钟止损价，0=使用固定止损"),
-            ("最后1分钟止盈", "0", "%", "最后1分钟止盈价，0=不止盈"),
-            ("基础仓位比例", "12", "", "初始余额的1/N作为基础仓位"),
-            ("仓位倍增阈值", "3", "倍", "余额达到N倍初始余额时仓位翻倍"),
-            ("最大仓位倍数", "8", "倍", "仓位最大倍数限制，防止过度扩张"),
-            ("最小开仓金额", "1", "$", "最小开仓金额，低于此值等待结算"),
-            ("API密钥", "", "", "已配置" if self._check_api_keys() else "未配置"),
-        ]
-        
-        for row, (name, value, unit, desc) in enumerate(config_items):
-            self.config_table.setItem(row, 0, QTableWidgetItem(name))
-            
-            if name == "策略模式":
-                combo = ExcelStyleComboBox()
-                combo.addItems(["CYCLE", "SINGLE", "CONTINUOUS"])
-                combo.setCurrentText(value)
-                self.config_table.setCellWidget(row, 1, combo)
-            elif name == "API密钥":
-                item = QTableWidgetItem(value)
-                item.setFlags(item.flags() & ~Qt.ItemIsEditable)
-                self.config_table.setItem(row, 1, item)
-            else:
-                self.config_table.setItem(row, 1, QTableWidgetItem(value))
-            
-            self.config_table.setItem(row, 2, QTableWidgetItem(unit))
-            self.config_table.setItem(row, 3, QTableWidgetItem(desc))
-        
-        config_layout.addWidget(self.config_table)
-        layout.addWidget(config_group)
-        
-        # 按钮
-        btn_layout = QHBoxLayout()
-        
-        self.start_btn = QPushButton("▶ 启动交易")
-        self.start_btn.clicked.connect(self._start_trading)
-        btn_layout.addWidget(self.start_btn)
-        
-        self.stop_btn = QPushButton("⏹ 停止交易")
-        self.stop_btn.clicked.connect(self._stop_trading)
-        self.stop_btn.setEnabled(False)
-        btn_layout.addWidget(self.stop_btn)
-        
-        self.save_btn = QPushButton("💾 保存配置")
-        self.save_btn.clicked.connect(self._save_config)
-        btn_layout.addWidget(self.save_btn)
-        
-        btn_layout.addStretch()
-        layout.addLayout(btn_layout)
-        
-        return widget
     
     def _create_trade_panel(self) -> QWidget:
         """创建交易面板"""
@@ -459,6 +356,17 @@ class MainWindow(QMainWindow):
         
         layout.addWidget(log_group, 3)  # 比例3，次要区域
         
+        # 底部：按钮区域（简化版）
+        btn_layout = QHBoxLayout()
+        
+        self.stop_btn = QPushButton("⏹ 停止交易")
+        self.stop_btn.clicked.connect(self._stop_trading)
+        self.stop_btn.setEnabled(False)  # 初始禁用，自动启动后启用
+        btn_layout.addWidget(self.stop_btn)
+        
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+        
         return widget
     
     def _check_api_keys(self) -> bool:
@@ -482,25 +390,34 @@ class MainWindow(QMainWindow):
         """保存配置"""
         self._add_log("配置已保存")
     
-    def _start_trading(self):
-        """启动交易"""
+    def _auto_start_trading(self):
+        """自动启动交易（使用V4策略默认参数）"""
         try:
             config = TradingConfig.load()
             
-            # 获取配置参数
-            mode = self.config_table.cellWidget(0, 1).currentText()
-            entry_price = float(self.config_table.item(1, 1).text())
-            stop_loss = float(self.config_table.item(2, 1).text())
-            take_profit = float(self.config_table.item(3, 1).text())
-            buy_limit = float(self.config_table.item(4, 1).text())
-            last_min_stop = float(self.config_table.item(5, 1).text())
-            last_min_profit = float(self.config_table.item(6, 1).text())
+            # V4策略默认参数
+            mode = "CONTINUOUS"  # V4策略模式
+            entry_price = 70.0   # 买入价格 70%
+            stop_loss = 45.0     # 止损价格 45%
+            take_profit = 95.0   # 止盈价格 95%
+            buy_limit = 85.0     # 买入限制 85%
+            last_min_stop = 0.0  # 最后1分钟止损（0=使用固定止损）
+            last_min_profit = 0.0  # 最后1分钟止盈（0=不止盈）
             
             # 仓位控制参数
-            position_divisor = float(self.config_table.item(7, 1).text())  # 基础仓位比例
-            position_multiplier_threshold = float(self.config_table.item(8, 1).text())  # 倍增阈值
-            max_position_multiplier = float(self.config_table.item(9, 1).text())  # 最大倍数
-            min_position_amount = float(self.config_table.item(10, 1).text())  # 最小开仓金额
+            position_divisor = 12.0  # 基础仓位比例
+            position_multiplier_threshold = 3.0  # 倍增阈值
+            max_position_multiplier = 8.0  # 最大倍数
+            min_position_amount = 1.0  # 最小开仓金额
+            
+            self._add_log("=" * 60)
+            self._add_log("自动启动V4策略交易")
+            self._add_log("=" * 60)
+            self._add_log(f"策略模式: {mode}")
+            self._add_log(f"买入价格: {entry_price}%")
+            self._add_log(f"止损价格: {stop_loss}%")
+            self._add_log(f"止盈价格: {take_profit}%")
+            self._add_log(f"买入限制: {buy_limit}%")
             
             # 创建交易引擎
             self.trader = UnifiedTrader(
@@ -525,7 +442,7 @@ class MainWindow(QMainWindow):
             self.trading_thread = threading.Thread(target=self.trader.start, daemon=True)
             self.trading_thread.start()
             
-            self.start_btn.setEnabled(False)
+            # 更新按钮状态
             self.stop_btn.setEnabled(True)
             
             # 立即更新状态显示
@@ -533,17 +450,15 @@ class MainWindow(QMainWindow):
             self.status_labels["YES价格"].setText("获取中...")
             self.status_labels["NO价格"].setText("获取中...")
             
-            self._add_log("交易已启动")
-            
         except Exception as e:
-            QMessageBox.critical(self, "错误", f"启动失败: {e}")
+            self._add_log(f"自动启动失败: {e}")
+            QMessageBox.critical(self, "错误", f"自动启动失败: {e}")
     
     def _stop_trading(self):
         """停止交易"""
         if self.trader:
             self.trader.stop()
         
-        self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         
         self._add_log("交易已停止")
