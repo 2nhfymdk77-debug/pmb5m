@@ -653,7 +653,7 @@ class RealtimeTrader:
         return False
     
     def _confirm_params(self) -> None:
-        """确认交易参数"""
+        """显示交易参数"""
         print("\n[参数] V4 策略")
         print(f"  余额: ${self.balance:.2f}")
         print(f"  买入: {int(self.config.entry_price)}%")
@@ -661,17 +661,6 @@ class RealtimeTrader:
         print(f"  止盈: 95% (全时段)")
         print(f"  买入限制: 价格 >= 85% 跳过")
         print()
-        
-        while True:
-            try:
-                print("确认开始? (y/n): ", end="", flush=True)
-                user_input = input().strip().lower()
-                if user_input == 'y':
-                    return
-                elif user_input == 'n':
-                    sys.exit(0)
-            except:
-                pass
     
     def _check_market(self) -> bool:
         """检查/更新市场信息"""
