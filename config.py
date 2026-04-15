@@ -26,7 +26,6 @@ except ImportError:
 # 配置文件路径
 CONFIG_DIR = Path.home() / ".polymarket-trader"
 CONFIG_FILE = CONFIG_DIR / "config.json"
-TRADE_HISTORY_FILE = CONFIG_DIR / "trade_history.json"
 LOG_DIR = CONFIG_DIR / "logs"
 
 # .env 文件路径（当前目录）
@@ -309,83 +308,3 @@ class TradingConfig:
             self.api_secret,
             self.passphrase,
         ])
-
-
-@dataclass
-class TradeRecord:
-    """交易记录类"""
-
-    trade_id: str
-    timestamp: str
-    type: str  # "LONG" or "SHORT"
-    token: str  # "YES" or "NO"
-    entry_price: float
-    exit_price: float
-    position_size: float
-    pnl: float
-    exit_reason: str  # "STOP_LOSS", "TAKE_PROFIT", "TIMEOUT"
-    balance_before: float
-    balance_after: float
-
-    def to_dict(self) -> dict:
-        """转换为字典"""
-        return asdict(self)
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "TradeRecord":
-        """从字典创建实例"""
-        return cls(**data)
-
-
-class TradeHistory:
-    """交易历史管理"""
-
-    def __init__(self):
-        self.records: list[TradeRecord] = []
-        self.load()
-
-    def add(self, record: TradeRecord) -> None:
-        """添加交易记录"""
-        self.records.append(record)
-        self.save()
-
-    def load(self) -> None:
-        """加载交易历史"""
-        if not TRADE_HISTORY_FILE.exists():
-            return
-
-        with open(TRADE_HISTORY_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            self.records = [TradeRecord.from_dict(item) for item in data]
-
-    def save(self) -> None:
-        """保存交易历史"""
-        with open(TRADE_HISTORY_FILE, "w", encoding="utf-8") as f:
-            json.dump([record.to_dict() for record in self.records], f, indent=2, ensure_ascii=False)
-
-    def get_all(self) -> list[TradeRecord]:
-        """获取所有交易记录"""
-        return self.records
-
-    def get_statistics(self) -> dict:
-        """获取统计信息"""
-        if not self.records:
-            return {
-                "total_trades": 0,
-                "win_trades": 0,
-                "loss_trades": 0,
-                "total_profit": 0.0,
-                "win_rate": 0.0,
-            }
-
-        win_trades = sum(1 for r in self.records if r.pnl > 0)
-        loss_trades = sum(1 for r in self.records if r.pnl < 0)
-        total_profit = sum(r.pnl for r in self.records)
-
-        return {
-            "total_trades": len(self.records),
-            "win_trades": win_trades,
-            "loss_trades": loss_trades,
-            "total_profit": round(total_profit, 2),
-            "win_rate": round(win_trades / len(self.records) * 100, 2),
-        }
