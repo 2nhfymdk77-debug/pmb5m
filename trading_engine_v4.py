@@ -235,8 +235,8 @@ class RealtimeTrader:
         entry_price = self.config.entry_price / 100.0
         
         # 检查价格是否达到买入条件（达到买入价且不极端）
-        can_buy_yes = yes_price >= entry_price and yes_price < 0.90
-        can_buy_no = no_price >= entry_price and no_price < 0.90
+        can_buy_yes = yes_price >= entry_price and yes_price < 0.85
+        can_buy_no = no_price >= entry_price and no_price < 0.85
         
         if not can_buy_yes and not can_buy_no:
             return  # 价格不满足条件，继续等待
